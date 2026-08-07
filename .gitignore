@@ -1,0 +1,12 @@
+.superpowers/
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
