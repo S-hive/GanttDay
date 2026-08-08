@@ -3,7 +3,10 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'package:uuid/uuid.dart';
+
 import '../../app.dart';
+import '../../domain/gantt/auto_hue.dart';
 import '../../domain/gantt/day_segmenter.dart';
 import '../../domain/gantt/gantt_geometry.dart';
 import '../../domain/gantt/lane_layout.dart';
@@ -13,6 +16,7 @@ import '../../domain/models/gantt_segment.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
+import 'day_gantt_gestures.dart';
 import 'day_gantt_painter.dart';
 
 /// Maps tasks to fully placed bars: segments -> lanes -> colors -> pixels.
@@ -87,16 +91,13 @@ class DayGanttPage extends StatefulWidget {
     required this.services,
     required this.date,
     this.onBarTap,
-    this.gestureBuilder,
+    this.interactive = true,
   });
 
   final AppServices services;
   final DateTime date;
   final void Function(Task task)? onBarTap;
-
-  /// Wraps the canvas with gesture handling (installed by a later task).
-  final Widget Function(BuildContext context, Widget canvas,
-      GanttGeometry geo, List<PlacedBar> bars)? gestureBuilder;
+  final bool interactive;
 
   @override
   State<DayGanttPage> createState() => _DayGanttPageState();
@@ -167,6 +168,68 @@ class _DayGanttPageState extends State<DayGanttPage> {
         widget.date.day == now.day;
   }
 
+  /// Persist a moved/resized task. On failure the stream re-emits the stored
+  /// state, so the bar visually snaps back — never fake success (spec §8).
+  Future<void> _commitUpdate(Task updated) async {
+    try {
+      await widget.services.tasks.upsert(updated);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {}); // repaint from unchanged _tasks: bar snaps back
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('保存失败，已恢复原位置：$e')),
+      );
+    }
+  }
+
+  Future<void> _createFromRange(WallMinutes start, WallMinutes end) async {
+    final title = await _promptTitle();
+    if (title == null || title.trim().isEmpty) return;
+    final tags = await widget.services.tasks.listTags();
+    final task = Task(
+      id: const Uuid().v4(),
+      title: title.trim(),
+      plannedStart: start,
+      plannedEnd: end,
+      autoHue: pickAutoHue([for (final t in tags) t.hue]),
+      createdAt: WallClock.now(),
+    );
+    try {
+      await widget.services.tasks.upsert(task);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('创建失败：$e')),
+      );
+    }
+  }
+
+  Future<String?> _promptTitle() {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('新任务'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: '任务名'),
+          onSubmitted: (v) => Navigator.of(context).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text),
+            child: const Text('创建'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
@@ -224,8 +287,16 @@ class _DayGanttPageState extends State<DayGanttPage> {
         ),
       );
 
-      if (widget.gestureBuilder != null) {
-        canvas = widget.gestureBuilder!(context, canvas, geo, bars);
+      if (widget.interactive) {
+        canvas = DayGanttGestures(
+          canvas: canvas,
+          geo: geo,
+          bars: bars,
+          tasks: _tasks,
+          onCommitUpdate: _commitUpdate,
+          onCreateRange: _createFromRange,
+          onTapTask: widget.onBarTap,
+        );
       } else if (widget.onBarTap != null) {
         canvas = GestureDetector(
           onTapUp: (d) {
