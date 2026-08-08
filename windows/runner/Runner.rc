@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.gantday" "\0"
-            VALUE "FileDescription", "ganttday" "\0"
+            VALUE "FileDescription", "GanttDay" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "ganttday" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.gantday. All rights reserved." "\0"
             VALUE "OriginalFilename", "ganttday.exe" "\0"
-            VALUE "ProductName", "ganttday" "\0"
+            VALUE "ProductName", "GanttDay" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
