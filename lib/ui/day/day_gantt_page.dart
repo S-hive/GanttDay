@@ -92,12 +92,14 @@ class DayGanttPage extends StatefulWidget {
     required this.date,
     this.onBarTap,
     this.interactive = true,
+    this.filterTagIds = const {},
   });
 
   final AppServices services;
   final DateTime date;
   final void Function(Task task)? onBarTap;
   final bool interactive;
+  final Set<String> filterTagIds;
 
   @override
   State<DayGanttPage> createState() => _DayGanttPageState();
@@ -112,6 +114,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
 
   List<Task> _tasks = const [];
   Map<String, Tag> _tags = const {};
+  Map<String, List<String>> _taskTagIds = const {};
   AppSettings _settings = const AppSettings();
 
   WallMinutes get _day0 => WallClock.minutes(
@@ -144,10 +147,15 @@ class _DayGanttPageState extends State<DayGanttPage> {
         .watchTasksOverlapping(_day0, _day0 + WallClock.minutesPerDay)
         .listen((tasks) async {
       final tags = await widget.services.tasks.listTags();
+      final tagIds = <String, List<String>>{};
+      for (final t in tasks) {
+        tagIds[t.id] = await widget.services.tasks.tagIdsForTask(t.id);
+      }
       if (!mounted) return;
       setState(() {
         _tasks = tasks;
         _tags = {for (final t in tags) t.id: t};
+        _taskTagIds = tagIds;
       });
     });
   }
@@ -244,8 +252,16 @@ class _DayGanttPageState extends State<DayGanttPage> {
       );
 
       final now = WallClock.now();
+      final visibleTasks = widget.filterTagIds.isEmpty
+          ? _tasks
+          : _tasks.where((t) {
+              final ids = _taskTagIds[t.id] ?? const <String>[];
+              return ids.any(widget.filterTagIds.contains) ||
+                  (t.primaryTagId != null &&
+                      widget.filterTagIds.contains(t.primaryTagId));
+            }).toList();
       final bars = buildPlacedBars(
-        tasks: _tasks,
+        tasks: visibleTasks,
         tags: _tags,
         geo: geo,
         dayAny: _day0,
@@ -292,7 +308,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
           canvas: canvas,
           geo: geo,
           bars: bars,
-          tasks: _tasks,
+          tasks: visibleTasks,
           onCommitUpdate: _commitUpdate,
           onCreateRange: _createFromRange,
           onTapTask: widget.onBarTap,
