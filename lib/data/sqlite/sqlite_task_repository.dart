@@ -15,6 +15,9 @@ class SqliteTaskRepository implements TaskRepository {
 
   void _notify() => _changes.add(null);
 
+  /// Used after bulk SQL writes (backup import) so watchers re-query.
+  void notifyChanged() => _notify();
+
   Future<void> dispose() => _changes.close();
 
   @override
