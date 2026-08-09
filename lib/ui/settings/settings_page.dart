@@ -3,8 +3,10 @@ import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
 import '../../data/backup/backup_service.dart';
+import '../../domain/gantt/color_palette.dart';
 import '../../domain/models/app_settings.dart';
 import '../../domain/models/tag.dart';
+import '../common/hue_picker.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.services});
@@ -49,9 +51,20 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Color _previewHue(int hue) {
+    final swatch = swatchForHue(hue);
+    if (swatch != null) return Color(swatch.argb);
+    return HSLColor.fromAHSL(
+      1,
+      hue.toDouble(),
+      kPalettePreviewSaturation,
+      kPalettePreviewLightness,
+    ).toColor();
+  }
+
   Future<void> _addTag() async {
     final nameCtrl = TextEditingController();
-    var hue = 200;
+    var hue = farthestPaletteHue([for (final t in _tags) t.hue]);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -66,22 +79,9 @@ class _SettingsPageState extends State<SettingsPage> {
                 autofocus: true,
               ),
               const SizedBox(height: 12),
-              Row(
-                children: [
-                  CircleAvatar(
-                    backgroundColor:
-                        HSLColor.fromAHSL(1, hue.toDouble(), 0.7, 0.55)
-                            .toColor(),
-                  ),
-                  Expanded(
-                    child: Slider(
-                      value: hue.toDouble(),
-                      min: 0,
-                      max: 359,
-                      onChanged: (v) => setLocal(() => hue = v.round()),
-                    ),
-                  ),
-                ],
+              HuePicker(
+                hue: hue,
+                onChanged: (v) => setLocal(() => hue = v),
               ),
             ],
           ),
@@ -269,9 +269,7 @@ class _SettingsPageState extends State<SettingsPage> {
           for (final tag in _tags)
             ListTile(
               leading: CircleAvatar(
-                backgroundColor:
-                    HSLColor.fromAHSL(1, tag.hue.toDouble(), 0.7, 0.55)
-                        .toColor(),
+                backgroundColor: _previewHue(tag.hue),
               ),
               title: Text(tag.name),
               trailing: IconButton(

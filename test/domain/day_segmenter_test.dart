@@ -84,4 +84,21 @@ void main() {
     );
     expect(segs, isEmpty);
   });
+
+  test('clipToRange keeps overnight span as one continuous segment', () {
+    final start = WallClock.minutes(DateTime(2026, 8, 8, 22, 0));
+    final end = WallClock.minutes(DateTime(2026, 8, 9, 4, 30));
+    final weekStart = WallClock.minutes(DateTime(2026, 8, 8));
+    final weekEnd = weekStart + WallClock.minutesPerDay * 7;
+    final segs = DaySegmenter.clipToRange(
+      taskId: 'a',
+      start: start,
+      end: end,
+      rangeStart: weekStart,
+      rangeEnd: weekEnd,
+    );
+    expect(segs, hasLength(1));
+    expect(segs.single.start, start);
+    expect(segs.single.end, end);
+  });
 }

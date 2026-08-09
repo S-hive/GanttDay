@@ -29,14 +29,18 @@ class GanttDayApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'GanttDay',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4A6CF7)),
-        useMaterial3: true,
+    // Also wrap here (not only in main) so hot reload picks it up; main() is
+    // not re-run on hot reload. Avoids Windows AXTree spam on dense Gantt UIs.
+    return ExcludeSemantics(
+      child: MaterialApp(
+        title: 'GanttDay',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4A6CF7)),
+          useMaterial3: true,
+        ),
+        home: AppShell(services: services),
       ),
-      home: AppShell(services: services),
     );
   }
 }

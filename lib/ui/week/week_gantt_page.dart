@@ -1,53 +1,71 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
-import '../../domain/gantt/auto_hue.dart';
-import '../../domain/gantt/day_segmenter.dart';
-import '../../domain/gantt/gantt_geometry.dart';
-import '../../domain/gantt/lane_layout.dart';
+import '../../domain/gantt/color_palette.dart';
 import '../../domain/gantt/urgency_palette.dart';
 import '../../domain/models/app_settings.dart';
-import '../../domain/models/gantt_segment.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
-import '../day/day_gantt_gestures.dart';
+import '../common/bar_detail_tooltip.dart';
 import '../day/day_gantt_painter.dart';
 import '../task/task_form_page.dart';
+import 'week_column_layout.dart';
 
-/// Week view: same horizontal Gantt as day, spanning 7 days. Default viewport
-/// is about two days wide; day boundaries are emphasized (spec section 3).
+/// Week calendar: columns = Mon–Sun, rows = time of day.
 class WeekGanttPage extends StatefulWidget {
   const WeekGanttPage({
     super.key,
     required this.services,
     required this.anchorDate,
     this.filterTagIds = const {},
+    this.onOpenDay,
   });
 
   final AppServices services;
   final DateTime anchorDate;
   final Set<String> filterTagIds;
+  final void Function(DateTime day)? onOpenDay;
 
   @override
   State<WeekGanttPage> createState() => _WeekGanttPageState();
 }
 
 class _WeekGanttPageState extends State<WeekGanttPage> {
+  static const double _hourHeight = 48;
+  static const double _gutterWidth = 52;
+  static const double _dayHeaderHeight = 36;
+  static const Color _dayBoundaryColor = Color(0xFFC62828);
+  static const double _dayBoundaryGap = 3;
+  static const double _dayBoundaryWidth = 1;
+  static const double _dayBoundaryStride =
+      _dayBoundaryGap * 2 + _dayBoundaryWidth;
+
+  /// Thin red rule with 3px air on each side between day columns.
+  /// Parent [Row] should use [CrossAxisAlignment.stretch] so the rule fills height.
+  Widget _dayBoundary() {
+    return const IgnorePointer(
+      child: SizedBox(
+        width: _dayBoundaryStride,
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: _dayBoundaryGap),
+          child: ColoredBox(color: _dayBoundaryColor),
+        ),
+      ),
+    );
+  }
+
   StreamSubscription<List<Task>>? _tasksSub;
   StreamSubscription<AppSettings>? _settingsSub;
-  final ScrollController _scroll = ScrollController();
+  final ScrollController _vScroll = ScrollController();
   bool _didInitialScroll = false;
 
   List<Task> _tasks = const [];
   Map<String, Tag> _tags = const {};
   AppSettings _settings = const AppSettings();
 
-  /// Monday of the week containing [anchorDate].
   DateTime get _weekStart {
     final d = DateTime(
         widget.anchorDate.year, widget.anchorDate.month, widget.anchorDate.day);
@@ -94,7 +112,7 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   void dispose() {
     _tasksSub?.cancel();
     _settingsSub?.cancel();
-    _scroll.dispose();
+    _vScroll.dispose();
     super.dispose();
   }
 
@@ -107,212 +125,374 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
         .toList();
   }
 
-  Future<void> _commitUpdate(Task updated) async {
-    try {
-      await widget.services.tasks.upsert(updated);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('保存失败，已恢复原位置：$e')),
+  /// Same as month: base palette color; overdue unfinished → gray.
+  BarPaint _paintFor(Task task) {
+    final hue =
+        task.overrideHue ?? _tags[task.primaryTagId]?.hue ?? task.autoHue;
+    final overdue = !task.isDone && task.plannedEnd < WallClock.now();
+    if (overdue) {
+      return BarPaint(
+        hue: hue,
+        saturation: 0.12,
+        lightness: 0.55,
+        hatchOverdue: false,
+        isPlannedGray: true,
       );
     }
+    final swatch = swatchForHue(hue);
+    return BarPaint(
+      hue: hue,
+      saturation: swatch?.saturation ?? UrgencyPalette.minSaturation,
+      lightness: swatch?.lightness ?? UrgencyPalette.calmLightness,
+      hatchOverdue: false,
+      isPlannedGray: false,
+    );
   }
 
-  Future<void> _createFromRange(WallMinutes start, WallMinutes end) async {
-    final controller = TextEditingController();
-    final title = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('新任务'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: '任务名'),
-          onSubmitted: (v) => Navigator.of(context).pop(v),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.of(context).pop(controller.text),
-              child: const Text('创建')),
-        ],
+  void _scrollToVisibleHours() {
+    if (_didInitialScroll || !_vScroll.hasClients) return;
+    _didInitialScroll = true;
+    final target = _settings.visibleStartHour * _hourHeight;
+    final max = _vScroll.position.maxScrollExtent;
+    _vScroll.jumpTo(target.clamp(0.0, max));
+  }
+
+  Future<void> _openTask(Task task) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => TaskFormPage(
+        services: widget.services,
+        existing: task,
       ),
-    );
-    if (title == null || title.trim().isEmpty) return;
-    final tags = await widget.services.tasks.listTags();
-    final task = Task(
-      id: const Uuid().v4(),
-      title: title.trim(),
-      plannedStart: start,
-      plannedEnd: end,
-      autoHue: pickAutoHue([for (final t in tags) t.hue]),
-      createdAt: WallClock.now(),
-    );
-    await widget.services.tasks.upsert(task);
+    ));
   }
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
-      // ~2 days visible by default.
-      final twoDayWidth = constraints.maxWidth;
-      final totalWidth = twoDayWidth * 7 / 2;
-      final geo = GanttGeometry(
-        viewStart: _rangeStart,
-        viewEnd: _rangeEnd,
-        widthPx: totalWidth,
-      );
+    final slots = layoutWeekSlots(weekMonday: _weekStart, tasks: _filtered);
+    final byId = {for (final t in _filtered) t.id: t};
+    final headers = const ['一', '二', '三', '四', '五', '六', '日'];
+    final bodyHeight = 24 * _hourHeight;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final todayIndex = today.difference(_weekStart).inDays;
+    final nowFrac = (now.hour * 60 + now.minute) / WallClock.minutesPerDay;
 
-      final now = WallClock.now();
-      final segments = <GanttSegment>[];
-      final taskById = {for (final t in _filtered) t.id: t};
-      for (final task in _filtered) {
-        for (var d = 0; d < 7; d++) {
-          final dayAny = _rangeStart + d * WallClock.minutesPerDay;
-          segments.addAll(DaySegmenter.segmentsForDay(task, dayAny));
-        }
-      }
-      final lanes = LaneLayout.assign(segments);
-      final bars = <PlacedBar>[];
-      for (final seg in segments) {
-        final task = taskById[seg.taskId]!;
-        final baseHue =
-            task.overrideHue ?? _tags[task.primaryTagId]?.hue ?? task.autoHue;
-        final paint = UrgencyPalette.paint(
-          baseHue: baseHue,
-          plannedStart: task.plannedStart,
-          plannedEnd: task.plannedEnd,
-          now: now,
-          isDone: task.isDone,
-          actualStart: task.actualStart,
-          actualEnd: task.actualEnd,
-          urgencyWindowDays: _settings.urgencyWindowDays,
-        );
-        double? actualX;
-        double? actualWidth;
-        if (task.isDone &&
-            task.actualStart != null &&
-            task.actualEnd != null) {
-          // Clip actual to the same day as this planned segment.
-          final dayAny = WallClock.dayStart(seg.start);
-          final actualSegs = DaySegmenter.clipToDay(
-            taskId: task.id,
-            start: task.actualStart!,
-            end: task.actualEnd!,
-            dayAny: dayAny,
-          );
-          if (actualSegs.isNotEmpty) {
-            final a = actualSegs.single;
-            actualX = geo.xOf(a.start);
-            actualWidth = geo.xOf(a.end) - geo.xOf(a.start);
-          }
-        }
-        bars.add(PlacedBar(
-          taskId: task.id,
-          x: geo.xOf(seg.start),
-          width: geo.xOf(seg.end) - geo.xOf(seg.start),
-          lane: lanes[LaneLayout.keyOf(seg)]!,
-          paint: paint.planned,
-          title: task.title,
-          isDone: task.isDone,
-          actualX: actualX,
-          actualWidth: actualWidth,
-          actualPaint: paint.actual,
-        ));
-      }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToVisibleHours());
 
-      final laneCount = bars.isEmpty
-          ? 1
-          : bars.map((b) => b.lane).reduce((a, b) => a > b ? a : b) + 1;
-      final contentHeight = DayGanttLayout.headerHeight +
-          laneCount * DayGanttLayout.laneHeight +
-          DayGanttLayout.laneHeight;
-
-      final hourMarks = <HourMark>[];
-      for (var d = 0; d < 7; d++) {
-        final day0 = _rangeStart + d * WallClock.minutesPerDay;
-        final dayDt = WallClock.dateTime(day0);
-        for (var h = 0; h < 24; h++) {
-          hourMarks.add(HourMark(
-            x: geo.xOf(day0 + h * 60),
-            label: h == 0
-                ? '${dayDt.month}/${dayDt.day}'
-                : (h % 6 == 0 ? '$h:00' : ''),
-            emphasized: h == 0,
-          ));
-        }
-      }
-      hourMarks.add(HourMark(
-        x: geo.xOf(_rangeEnd),
-        label: '',
-        emphasized: true,
-      ));
-
-      if (!_didInitialScroll) {
-        _didInitialScroll = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scroll.hasClients) {
-            // Prefer today's day within the week, else week start.
-            final today = DateTime.now();
-            final today0 = DateTime(today.year, today.month, today.day);
-            final offsetDays = today0.difference(_weekStart).inDays;
-            final jumpDay = (offsetDays >= 0 && offsetDays < 7) ? offsetDays : 0;
-            _scroll.jumpTo(
-              geo.xOf(_rangeStart +
-                  jumpDay * WallClock.minutesPerDay +
-                  _settings.visibleStartHour * 60),
-            );
-          }
-        });
-      }
-
-      final todayLine = (() {
-        final n = DateTime.now();
-        final n0 = DateTime(n.year, n.month, n.day);
-        if (n0.isBefore(_weekStart) ||
-            !n0.isBefore(_weekStart.add(const Duration(days: 7)))) {
-          return null;
-        }
-        return geo.xOf(now);
-      })();
-
-      Widget canvas = CustomPaint(
-        size: Size(totalWidth, contentHeight),
-        painter: DayGanttPainter(
-          bars: bars,
-          hourMarks: hourMarks,
-          todayLineX: todayLine,
+    return Column(
+      children: [
+        SizedBox(
+          height: _dayHeaderHeight,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(width: _gutterWidth),
+              for (var d = 0; d < 7; d++) ...[
+                if (d > 0) _dayBoundary(),
+                Expanded(
+                  child: _DayHeader(
+                    weekday: headers[d],
+                    day: _weekStart.add(Duration(days: d)),
+                    isToday: d == todayIndex,
+                    onTap: widget.onOpenDay == null
+                        ? null
+                        : () => widget.onOpenDay!(
+                              _weekStart.add(Duration(days: d)),
+                            ),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
-      );
-
-      canvas = DayGanttGestures(
-        canvas: canvas,
-        geo: geo,
-        bars: bars,
-        tasks: _filtered,
-        onCommitUpdate: _commitUpdate,
-        onCreateRange: _createFromRange,
-        onTapTask: (task) {
-          Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => TaskFormPage(
-              services: widget.services,
-              existing: task,
+        const Divider(height: 1),
+        Expanded(
+          child: SingleChildScrollView(
+            controller: _vScroll,
+            child: SizedBox(
+              height: bodyHeight,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: _gutterWidth,
+                    child: Column(
+                      children: [
+                        for (var h = 0; h < 24; h++)
+                          SizedBox(
+                            height: _hourHeight,
+                            child: Align(
+                              alignment: Alignment.topRight,
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.only(right: 6, top: 2),
+                                child: Text(
+                                  '$h:00',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelSmall
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (var d = 0; d < 7; d++) ...[
+                              if (d > 0) _dayBoundary(),
+                              Expanded(
+                                child: _DayColumn(
+                                  isToday: d == todayIndex,
+                                  hourHeight: _hourHeight,
+                                  slots: slots
+                                      .where((s) => s.dayIndex == d)
+                                      .toList(),
+                                  paintFor: (id) => _paintFor(byId[id]!),
+                                  onTap: (id) => _openTask(byId[id]!),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        if (todayIndex >= 0 && todayIndex < 7)
+                          Positioned(
+                            top: nowFrac * bodyHeight - 1,
+                            left: 0,
+                            right: 0,
+                            height: 2,
+                            child: IgnorePointer(
+                              child: Row(
+                                children: [
+                                  for (var d = 0; d < 7; d++) ...[
+                                    if (d > 0)
+                                      const SizedBox(width: _dayBoundaryStride),
+                                    Expanded(
+                                      child: d == todayIndex
+                                          ? ColoredBox(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .error,
+                                            )
+                                          : const SizedBox.expand(),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ));
-        },
-      );
-
-      return SingleChildScrollView(
-        controller: _scroll,
-        scrollDirection: Axis.horizontal,
-        child: SizedBox(
-          width: totalWidth,
-          height: math.max(contentHeight, constraints.maxHeight),
-          child: Align(alignment: Alignment.topLeft, child: canvas),
+          ),
         ),
-      );
-    });
+      ],
+    );
   }
+}
+
+class _DayHeader extends StatelessWidget {
+  const _DayHeader({
+    required this.weekday,
+    required this.day,
+    required this.isToday,
+    this.onTap,
+  });
+
+  final String weekday;
+  final DateTime day;
+  final bool isToday;
+  final VoidCallback? onTap;
+
+  /// Compact same-line label: `一 3/9`.
+  String get _label => '$weekday ${day.month}/${day.day}';
+
+  @override
+  Widget build(BuildContext context) {
+    const todayRed = Color(0xFFC62828);
+    final label = Text(
+      _label,
+      maxLines: 1,
+      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            fontWeight: isToday ? FontWeight.w700 : null,
+          ),
+    );
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Center(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: isToday
+                ? Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: todayRed, width: 1),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: label,
+                  )
+                : label,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DayColumn extends StatelessWidget {
+  const _DayColumn({
+    required this.isToday,
+    required this.hourHeight,
+    required this.slots,
+    required this.paintFor,
+    required this.onTap,
+  });
+
+  final bool isToday;
+  final double hourHeight;
+  final List<WeekSlot> slots;
+  final BarPaint Function(String taskId) paintFor;
+  final void Function(String taskId) onTap;
+
+  static Positioned _slotPositioned({
+    required WeekSlot slot,
+    required double dayHeight,
+    required double columnWidth,
+    required BarPaint paint,
+    required VoidCallback onTap,
+  }) {
+    final top = slot.topFrac * dayHeight;
+    var height = slot.heightFrac * dayHeight;
+    if (height < 18) height = 18;
+    final widthFrac = 1 / slot.columnCount;
+    final left = slot.columnIndex * widthFrac * columnWidth + 1.5;
+    // Keep a positive width even when many overlapping columns shrink the slot.
+    final width = (widthFrac * columnWidth - 3).clamp(4.0, columnWidth);
+    final bg = colorOf(paint);
+    final fg = textColorOn(paint);
+    final focusDay = WallClock.dateTime(WallClock.dayStart(slot.segStart));
+    final label = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: Text(
+          slot.title,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: fg,
+            height: 1.15,
+          ),
+        ),
+      ),
+    );
+    return Positioned(
+      left: left,
+      width: width,
+      top: top,
+      height: height,
+      // Dense Tooltip+Stack trees trip Windows semantics assertions; bars
+      // already expose their title via Text.
+      child: ExcludeSemantics(
+        child: BarDetailTooltip(
+          title: slot.title,
+          start: slot.spanStart,
+          end: slot.spanEnd,
+          focusDay: focusDay,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(6),
+              child: Ink(
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: label,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dayH = 24 * hourHeight;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: isToday
+            ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.04)
+            : null,
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          // Keep the hour grid as a sibling, not a CustomPaint parent of the
+          // interactive Stack — nesting caused semantics.parentDataDirty spam.
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: ExcludeSemantics(
+                  child: CustomPaint(
+                    painter: _HourGridPainter(hourHeight: hourHeight),
+                  ),
+                ),
+              ),
+              for (final slot in slots)
+                _slotPositioned(
+                  slot: slot,
+                  dayHeight: dayH,
+                  columnWidth: w,
+                  paint: paintFor(slot.taskId),
+                  onTap: () => onTap(slot.taskId),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _HourGridPainter extends CustomPainter {
+  _HourGridPainter({required this.hourHeight});
+
+  final double hourHeight;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.black12
+      ..strokeWidth = 1;
+    for (var h = 0; h <= 24; h++) {
+      final y = h * hourHeight;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _HourGridPainter oldDelegate) =>
+      oldDelegate.hourHeight != hourHeight;
 }

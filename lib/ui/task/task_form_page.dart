@@ -3,10 +3,12 @@ import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
 import '../../domain/gantt/auto_hue.dart';
+import '../../domain/gantt/color_palette.dart';
 import '../../domain/gantt/gantt_geometry.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
+import '../common/hue_picker.dart';
 import '../complete/complete_dialog.dart';
 
 /// Create / edit a task. Validates end > start before saving.
@@ -253,7 +255,7 @@ class _TaskFormPageState extends State<TaskFormPage> {
           if (_isEdit)
             IconButton(
               icon: const Icon(Icons.delete_outline),
-              tooltip: '删除',
+              tooltip: '',
               onPressed: _saving ? null : _delete,
             ),
         ],
@@ -356,17 +358,16 @@ class _TaskFormPageState extends State<TaskFormPage> {
             title: const Text('手动覆盖色相'),
             value: _overrideHue != null,
             onChanged: (on) => setState(() {
-              _overrideHue = on ? (_overrideHue ?? 200) : null;
+              _overrideHue = on
+                  ? (_overrideHue ??
+                      farthestPaletteHue([for (final t in _tags) t.hue]))
+                  : null;
             }),
           ),
           if (_overrideHue != null)
-            Slider(
-              value: _overrideHue!.toDouble(),
-              min: 0,
-              max: 359,
-              divisions: 359,
-              label: '$_overrideHue',
-              onChanged: (v) => setState(() => _overrideHue = v.round()),
+            HuePicker(
+              hue: _overrideHue!,
+              onChanged: (v) => setState(() => _overrideHue = v),
             ),
           if (_error != null) ...[
             const SizedBox(height: 8),

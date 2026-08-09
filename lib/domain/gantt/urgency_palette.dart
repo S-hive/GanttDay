@@ -1,4 +1,5 @@
 import '../time/wall_clock.dart';
+import 'color_palette.dart';
 
 /// How one bar should be painted. Pure numbers; the UI maps this to actual
 /// Flutter colors (HSL) and hatching.
@@ -28,11 +29,16 @@ class TaskPaint {
 /// Color rules from spec section 5: linear urgency toward planned end within
 /// a configurable window; overdue caps vividness and adds hatch; completed
 /// tasks show a gray planned bar under a single vivid actual bar.
+///
+/// Palette hues deepen from the swatch's calm S/L toward max vividness;
+/// custom hues use the legacy calm floor (S=0.25, L=0.72).
 class UrgencyPalette {
   UrgencyPalette._();
 
   static const double minSaturation = 0.25;
   static const double maxSaturation = 1.0;
+  static const double calmLightness = 0.72;
+  static const double urgentLightness = 0.45;
 
   static TaskPaint paint({
     required int baseHue,
@@ -73,8 +79,11 @@ class UrgencyPalette {
     } else {
       t = 1 - (remaining / windowMin);
     }
-    final sat = minSaturation + (maxSaturation - minSaturation) * t;
-    final light = 0.72 - 0.27 * t;
+    final swatch = swatchForHue(baseHue);
+    final baseSat = swatch?.saturation ?? minSaturation;
+    final baseLight = swatch?.lightness ?? calmLightness;
+    final sat = baseSat + (maxSaturation - baseSat) * t;
+    final light = baseLight + (urgentLightness - baseLight) * t;
     return TaskPaint(
       planned: BarPaint(
         hue: baseHue,

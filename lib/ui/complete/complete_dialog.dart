@@ -92,7 +92,7 @@ class _CompleteDialogState extends State<_CompleteDialog> {
     );
 
     return AlertDialog(
-      title: Text('完成：${t.title}'),
+      title: Text(t.isDone ? '修改实际时间：${t.title}' : '设置实际时间：${t.title}'),
       content: SizedBox(
         width: 640,
         child: Column(
@@ -165,7 +165,7 @@ class _CompleteDialogState extends State<_CompleteDialog> {
           onPressed: () => Navigator.of(context).pop(
             (start: _selStart, end: _selEnd),
           ),
-          child: const Text('确认完成'),
+          child: Text(t.isDone ? '保存' : '确认完成'),
         ),
       ],
     );

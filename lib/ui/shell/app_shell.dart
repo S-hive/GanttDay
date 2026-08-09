@@ -1,6 +1,4 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
 import '../../domain/models/tag.dart';
@@ -79,33 +77,22 @@ class _AppShellState extends State<AppShell> {
     await _reloadTags();
   }
 
-  Future<void> _seedSampleTasks() async {
-    final day = DateTime(_date.year, _date.month, _date.day);
-    const uuid = Uuid();
-    final now = WallClock.now();
-    await widget.services.tasks.upsert(Task(
-      id: uuid.v4(),
-      title: '剪辑客户宣传片',
-      plannedStart: WallClock.minutes(day.add(const Duration(hours: 9))),
-      plannedEnd: WallClock.minutes(day.add(const Duration(hours: 12))),
-      autoHue: 210,
-      createdAt: now,
-    ));
-    await widget.services.tasks.upsert(Task(
-      id: uuid.v4(),
-      title: '拍摄产品照片',
-      plannedStart: WallClock.minutes(day.add(const Duration(hours: 11))),
-      plannedEnd: WallClock.minutes(day.add(const Duration(hours: 14))),
-      autoHue: 20,
-      createdAt: now,
-    ));
-  }
-
   String get _titleLabel {
     if (_navIndex == 2) {
       return '${_date.year}-${_date.month.toString().padLeft(2, '0')}';
     }
+    if (_navIndex == 1) {
+      final day = DateTime(_date.year, _date.month, _date.day);
+      final monday = day.subtract(Duration(days: day.weekday - 1));
+      return '${monday.month}月 · 第${_weekOfMonth(monday)}周';
+    }
     return '${_date.year}-${_date.month.toString().padLeft(2, '0')}-${_date.day.toString().padLeft(2, '0')}';
+  }
+
+  /// 1-based week index within [date]'s month (weeks start Monday).
+  static int _weekOfMonth(DateTime date) {
+    final first = DateTime(date.year, date.month, 1);
+    return ((date.day + first.weekday - 2) ~/ 7) + 1;
   }
 
   @override
@@ -132,15 +119,9 @@ class _AppShellState extends State<AppShell> {
           ],
         ),
         actions: [
-          if (kDebugMode)
-            IconButton(
-              icon: const Icon(Icons.bug_report_outlined),
-              tooltip: '插入示例任务（调试）',
-              onPressed: _seedSampleTasks,
-            ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
-            tooltip: '设置',
+            tooltip: '',
             onPressed: _openSettings,
           ),
         ],
@@ -188,21 +169,27 @@ class _AppShellState extends State<AppShell> {
           Expanded(child: _buildBody()),
         ],
       ),
-      floatingActionButton: _navIndex == 2
-          ? null
-          : FloatingActionButton(
-              onPressed: () => _openForm(),
-              tooltip: '新建任务',
-              child: const Icon(Icons.add),
-            ),
       bottomNavigationBar: NavigationBar(
+        height: 56,
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
         selectedIndex: _navIndex,
         onDestinationSelected: (i) => setState(() => _navIndex = i),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.view_day_outlined), label: '日'),
-          NavigationDestination(icon: Icon(Icons.view_week_outlined), label: '周'),
           NavigationDestination(
-              icon: Icon(Icons.calendar_month_outlined), label: '月'),
+            icon: Icon(Icons.view_day_outlined),
+            label: '日',
+            tooltip: '',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.view_week_outlined),
+            label: '周',
+            tooltip: '',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.calendar_month_outlined),
+            label: '月',
+            tooltip: '',
+          ),
         ],
       ),
     );
@@ -211,19 +198,29 @@ class _AppShellState extends State<AppShell> {
   Widget _buildBody() {
     switch (_navIndex) {
       case 1:
-        return WeekGanttPage(
-          services: widget.services,
-          anchorDate: _date,
-          filterTagIds: _filterTagIds,
+        // Dense week grid + Windows accessibility bridge: exclude the whole
+        // page from semantics so AXTree doesn't spam / corrupt on tab switch.
+        return ExcludeSemantics(
+          child: WeekGanttPage(
+            services: widget.services,
+            anchorDate: _date,
+            filterTagIds: _filterTagIds,
+            onOpenDay: (day) => setState(() {
+              _date = day;
+              _navIndex = 0;
+            }),
+          ),
         );
       case 2:
-        return MonthPage(
-          services: widget.services,
-          month: _date,
-          onOpenDay: (day) => setState(() {
-            _date = day;
-            _navIndex = 0;
-          }),
+        return ExcludeSemantics(
+          child: MonthPage(
+            services: widget.services,
+            month: _date,
+            onOpenDay: (day) => setState(() {
+              _date = day;
+              _navIndex = 0;
+            }),
+          ),
         );
       default:
         return DayGanttPage(

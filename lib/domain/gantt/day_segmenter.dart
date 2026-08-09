@@ -26,10 +26,30 @@ class DaySegmenter {
   }) {
     final day0 = WallClock.dayStart(dayAny);
     final day1 = WallClock.dayEndExclusive(dayAny);
-    if (start >= day1 || end <= day0) return const [];
-    final clippedStart = start < day0 ? day0 : start;
-    final clippedEnd = end > day1 ? day1 : end;
+    return clipToRange(
+      taskId: taskId,
+      start: start,
+      end: end,
+      rangeStart: day0,
+      rangeEnd: day1,
+    );
+  }
+
+  /// Clip a span to an arbitrary half-open range `[rangeStart, rangeEnd)`.
+  /// Used by week view to keep overnight tasks as one continuous bar.
+  static List<GanttSegment> clipToRange({
+    required String taskId,
+    required WallMinutes start,
+    required WallMinutes end,
+    required WallMinutes rangeStart,
+    required WallMinutes rangeEnd,
+  }) {
+    if (start >= rangeEnd || end <= rangeStart) return const [];
+    final clippedStart = start < rangeStart ? rangeStart : start;
+    final clippedEnd = end > rangeEnd ? rangeEnd : end;
     if (clippedEnd <= clippedStart) return const [];
-    return [GanttSegment(taskId: taskId, start: clippedStart, end: clippedEnd)];
+    return [
+      GanttSegment(taskId: taskId, start: clippedStart, end: clippedEnd),
+    ];
   }
 }

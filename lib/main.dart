@@ -12,9 +12,12 @@ import 'data/sqlite/sqlite_task_repository.dart';
 import 'data/windows_file_gateway.dart';
 import 'platform/task_repository.dart';
 import 'ui/common/db_error_screen.dart';
+import 'windows_safe_binding.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  // Must run before any other binding init. Hot restart does NOT re-run this
+  // for a new native AXTree — quit the process (Ctrl+C) after first install.
+  WindowsSafeWidgetsBinding.ensureInitialized();
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 
@@ -34,9 +37,9 @@ Future<void> _openAndRun(String dbPath) async {
       settings: SqliteSettingsStore(db),
       files: WindowsFileGateway(),
     );
-    runApp(GanttDayApp(services: services));
+    runApp(_wrapForPlatform(GanttDayApp(services: services)));
   } on DatabaseOpenException catch (e) {
-    runApp(MaterialApp(
+    runApp(_wrapForPlatform(MaterialApp(
       title: 'GanttDay',
       debugShowCheckedModeBanner: false,
       home: DbErrorScreen(
@@ -53,6 +56,15 @@ Future<void> _openAndRun(String dbPath) async {
         },
         onQuit: () => exit(0),
       ),
-    ));
+    )));
   }
+}
+
+/// Windows accessibility bridge corrupts easily with dense Gantt UIs (AXTree
+/// "will not be in the tree"). Exclude the whole app from semantics there.
+Widget _wrapForPlatform(Widget app) {
+  if (Platform.isWindows) {
+    return ExcludeSemantics(child: app);
+  }
+  return app;
 }
