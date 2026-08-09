@@ -10,3 +10,12 @@ build/
 *.log
 .DS_Store
 Thumbs.db
+
+# Local data / backups (never commit user schedules)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+ex.json
+**/__pycache__/
+*.pyc

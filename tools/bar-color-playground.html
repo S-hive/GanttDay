@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GanttDay · 时间条配色试验</title>
+  <style>
+    :root {
+      --bar: #457BD9;
+      --bg: #fbf8ff;
+      --panel: #ffffff;
+      --ink: #1a1d23;
+      --muted: #5c6570;
+      --line: rgba(0, 0, 0, 0.08);
+      --hour: rgba(0, 0, 0, 0.14);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+
+    header {
+      padding: 20px 28px 8px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    header h1 {
+      margin: 0 0 6px;
+      font-size: 1.35rem;
+      font-weight: 700;
+    }
+    header p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 20px;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 16px 28px 40px;
+    }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    .panel {
+      background: var(--panel);
+      border-radius: 12px;
+      padding: 16px 18px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.04);
+    }
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 0.78rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .swatches {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .swatch {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      border: 2px solid transparent;
+      cursor: pointer;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+    }
+    .swatch.active {
+      border-color: #111;
+      box-shadow: 0 0 0 2px #fff, 0 0 0 4px #111;
+    }
+    .swatch:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    label.field {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    input[type="color"] {
+      width: 48px;
+      height: 40px;
+      padding: 0;
+      border: none;
+      background: none;
+      cursor: pointer;
+    }
+    input[type="text"] {
+      width: 100%;
+      font: inherit;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.95rem;
+      padding: 8px 10px;
+      border: 1px solid #d5d8de;
+      border-radius: 8px;
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: #60a5fa;
+      box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.25);
+    }
+
+    .meta {
+      font-size: 0.8rem;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-top: 8px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .meta code {
+      font-family: ui-monospace, Consolas, monospace;
+      background: #f0f2f5;
+      padding: 1px 5px;
+      border-radius: 4px;
+      color: #111;
+    }
+    .copy-btn {
+      margin-top: 10px;
+      width: 100%;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #111;
+      color: #fff;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .copy-btn:hover { background: #333; }
+    .copy-btn.ok { background: #15803d; }
+
+    .stage {
+      overflow: hidden;
+    }
+    .timeline {
+      position: relative;
+      background: #fbf8ff;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      overflow: hidden;
+    }
+    .hours {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      height: 32px;
+      border-bottom: 1px solid var(--line);
+      font-size: 11px;
+      color: rgba(0,0,0,0.55);
+    }
+    .hours span {
+      padding: 8px 0 0 6px;
+      border-left: 1px solid var(--line);
+      font-weight: 500;
+    }
+    .hours span:first-child { border-left: none; }
+    .hours span.emph { font-weight: 700; color: rgba(0,0,0,0.7); }
+
+    .lanes {
+      position: relative;
+      height: calc(28px * 4);
+      background-image:
+        repeating-linear-gradient(
+          to right,
+          transparent 0,
+          transparent calc(12.5% - 1px),
+          var(--line) calc(12.5% - 1px),
+          var(--line) 12.5%
+        ),
+        repeating-linear-gradient(
+          to bottom,
+          transparent 0,
+          transparent 27px,
+          var(--line) 27px,
+          var(--line) 28px
+        );
+    }
+
+    .bar {
+      position: absolute;
+      height: 20px;
+      top: 4px;
+      border-radius: 4px;
+      box-shadow: 0 1.5px 0 rgba(0,0,0,0.08);
+      border: 1px solid color-mix(in srgb, var(--bar) 55%, #000);
+      background: var(--bar);
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      overflow: hidden;
+      white-space: nowrap;
+      font-size: 12px;
+      line-height: 1.15;
+      cursor: default;
+      user-select: none;
+    }
+    .bar .title {
+      font-weight: 700;
+      margin-right: 8px;
+    }
+    .bar .time {
+      font-weight: 500;
+      opacity: 0.78;
+      font-size: 11px;
+    }
+    .bar.narrow .time { display: none; }
+    .bar.on-dark { color: #fff; }
+    .bar.on-light { color: rgba(0,0,0,0.87); }
+
+    .lane { position: absolute; left: 0; right: 0; height: 28px; }
+    .lane:nth-child(1) { top: 0; }
+    .lane:nth-child(2) { top: 28px; }
+    .lane:nth-child(3) { top: 56px; }
+    .lane:nth-child(4) { top: 84px; }
+
+    /* left% / width% map 8:00–16:00 = 8 hours */
+    #bar-a { left: 6.25%; width: 31.25%; }   /* 8:30–11:00 */
+    #bar-b { left: 37.5%; width: 25%; }      /* 11:00–13:00 */
+    #bar-c { left: 12.5%; width: 56.25%; }   /* 9:00–13:30 */
+    #bar-d { left: 62.5%; width: 31.25%; }   /* 13:00–15:30 */
+
+    .caption {
+      margin-top: 14px;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>GanttDay 时间条配色试验</h1>
+    <p>
+      模拟日视图 20px 时间条（任务名 + 时段耗时）。改色后预览会立刻更新。
+      满意后把下方 <strong>Hex</strong> 发给我，再改软件默认色。
+    </p>
+  </header>
+
+  <div class="layout">
+    <aside class="panel">
+      <h2>当前色卡</h2>
+      <div class="swatches" id="swatches"></div>
+
+      <label class="field" for="hex">Hex</label>
+      <div class="row">
+        <input id="hex" type="text" value="#457BD9" spellcheck="false" />
+        <input id="picker" type="color" value="#457BD9" title="取色器" />
+      </div>
+
+      <div class="meta">
+        <div>HSL：<code id="hslOut">—</code></div>
+        <div>文字色：<code id="fgOut">—</code>（按亮度自动黑/白）</div>
+        <div style="margin-top:6px">Dart 用：</div>
+        <code id="dartOut" style="display:block;margin-top:4px;word-break:break-all">—</code>
+      </div>
+      <button class="copy-btn" id="copyBtn" type="button">复制 Hex</button>
+    </aside>
+
+    <main class="panel stage">
+      <h2>日视图预览（8:00 – 16:00）</h2>
+      <div class="timeline">
+        <div class="hours">
+          <span class="emph">8:00</span>
+          <span>9:00</span>
+          <span>10:00</span>
+          <span class="emph">11:00</span>
+          <span>12:00</span>
+          <span>13:00</span>
+          <span class="emph">14:00</span>
+          <span>15:00</span>
+        </div>
+        <div class="lanes">
+          <div class="lane">
+            <div class="bar" id="bar-a">
+              <span class="title">设计评审</span>
+              <span class="time">08:30 – 11:00（2h 30m）</span>
+            </div>
+          </div>
+          <div class="lane">
+            <div class="bar" id="bar-b">
+              <span class="title">原型迭代</span>
+              <span class="time">11:00 – 13:00（2h）</span>
+            </div>
+          </div>
+          <div class="lane">
+            <div class="bar" id="bar-c">
+              <span class="title">灵感</span>
+              <span class="time">09:00 – 13:30（4h 30m）</span>
+            </div>
+          </div>
+          <div class="lane">
+            <div class="bar narrow" id="bar-d">
+              <span class="title">客户同步</span>
+              <span class="time">13:00 – 15:30（2h 30m）</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">
+        窄条会隐藏时段文字（与软件「空间不够时优先任务名」接近）。当前默认色：应用内
+        <code>#457BD9</code>。
+      </p>
+    </main>
+  </div>
+
+  <script>
+    const PALETTE = [
+      { name: "霁蓝", hex: "#457BD9" },
+      { name: "旧霁蓝", hex: "#60A5FA" },
+      { name: "桃", hex: "#FFDAC1" },
+      { name: "芽绿", hex: "#E2F0CB" },
+      { name: "薄荷", hex: "#B5EAD7" },
+      { name: "淡紫", hex: "#DDD6FE" },
+      { name: "天空", hex: "#BAE6FD" },
+      { name: "奶油", hex: "#FEF3C7" },
+      { name: "灰", hex: "#DEE2E6" },
+      { name: "旧默认", hex: "#50C8FD" },
+    ];
+
+    const hexInput = document.getElementById("hex");
+    const picker = document.getElementById("picker");
+    const hslOut = document.getElementById("hslOut");
+    const fgOut = document.getElementById("fgOut");
+    const dartOut = document.getElementById("dartOut");
+    const copyBtn = document.getElementById("copyBtn");
+    const swatchesEl = document.getElementById("swatches");
+
+    function normalizeHex(raw) {
+      let s = String(raw).trim();
+      if (!s.startsWith("#")) s = "#" + s;
+      if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+        s = "#" + [...s.slice(1)].map((c) => c + c).join("");
+      }
+      if (!/^#[0-9a-fA-F]{6}$/.test(s)) return null;
+      return s.toUpperCase();
+    }
+
+    function hexToRgb(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    }
+
+    function rgbToHsl(r, g, b) {
+      r /= 255; g /= 255; b /= 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      let h = 0, s = 0;
+      const l = (max + min) / 2;
+      const d = max - min;
+      if (d !== 0) {
+        s = d / (1 - Math.abs(2 * l - 1));
+        switch (max) {
+          case r: h = ((g - b) / d) % 6; break;
+          case g: h = (b - r) / d + 2; break;
+          default: h = (r - g) / d + 4;
+        }
+        h *= 60;
+        if (h < 0) h += 360;
+      }
+      return { h: Math.round(h), s: +s.toFixed(3), l: +l.toFixed(3) };
+    }
+
+    function relativeLuminance(r, g, b) {
+      const f = (c) => {
+        c /= 255;
+        return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+      };
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    }
+
+    function applyColor(hex) {
+      const rgb = hexToRgb(hex);
+      const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+      const lum = relativeLuminance(rgb.r, rgb.g, rgb.b);
+      const onDark = lum <= 0.55;
+
+      document.documentElement.style.setProperty("--bar", hex);
+      hexInput.value = hex;
+      picker.value = hex.toLowerCase();
+      hslOut.textContent = `${hsl.h}° / S ${hsl.s} / L ${hsl.l}`;
+      fgOut.textContent = onDark ? "白字" : "黑字";
+      dartOut.textContent =
+        `hue: ${hsl.h}, saturation: ${hsl.s}, lightness: ${hsl.l}, argb: 0xFF${hex.slice(1)}`;
+
+      document.querySelectorAll(".bar").forEach((el) => {
+        el.classList.toggle("on-dark", onDark);
+        el.classList.toggle("on-light", !onDark);
+      });
+
+      document.querySelectorAll(".swatch").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.hex === hex);
+      });
+    }
+
+    PALETTE.forEach((p) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "swatch";
+      btn.title = `${p.name} ${p.hex}`;
+      btn.dataset.hex = p.hex;
+      btn.style.background = p.hex;
+      btn.addEventListener("click", () => applyColor(p.hex));
+      swatchesEl.appendChild(btn);
+    });
+
+    hexInput.addEventListener("input", () => {
+      const hex = normalizeHex(hexInput.value);
+      if (hex) applyColor(hex);
+    });
+    hexInput.addEventListener("change", () => {
+      const hex = normalizeHex(hexInput.value);
+      if (hex) applyColor(hex);
+      else hexInput.value = picker.value.toUpperCase();
+    });
+    picker.addEventListener("input", () => applyColor(picker.value.toUpperCase()));
+
+    copyBtn.addEventListener("click", async () => {
+      const hex = normalizeHex(hexInput.value) || picker.value.toUpperCase();
+      try {
+        await navigator.clipboard.writeText(hex);
+        copyBtn.textContent = "已复制 " + hex;
+        copyBtn.classList.add("ok");
+        setTimeout(() => {
+          copyBtn.textContent = "复制 Hex";
+          copyBtn.classList.remove("ok");
+        }, 1500);
+      } catch {
+        copyBtn.textContent = "复制失败，请手动选中";
+      }
+    });
+
+    applyColor("#457BD9");
+  </script>
+</body>
+</html>
