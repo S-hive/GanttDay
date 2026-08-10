@@ -1,13 +1,15 @@
-import 'package:flutter/material.dart';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart' hide ColorSwatch;
 import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
 import '../../data/backup/backup_service.dart';
-import '../../domain/gantt/color_palette.dart';
-import '../../domain/gantt/factory_swatches.dart';
 import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/models/app_settings.dart';
+import '../../domain/models/color_swatch.dart';
 import '../../domain/models/tag.dart';
+import '../common/argb_color_field.dart';
 import '../common/swatch_picker.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -22,8 +24,12 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   AppSettings _settings = const AppSettings();
   List<Tag> _tags = const [];
+  List<ColorSwatch> _swatches = const [];
   String? _message;
   bool _busy = false;
+
+  Map<String, ColorSwatch> get _swatchesById =>
+      {for (final s in _swatches) s.id: s};
 
   @override
   void initState() {
@@ -37,10 +43,12 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _reload() async {
     final s = await widget.services.settings.read();
     final tags = await widget.services.tasks.listTags();
+    final swatches = await widget.services.tasks.listSwatches();
     if (!mounted) return;
     setState(() {
       _settings = s;
       _tags = tags;
+      _swatches = swatches;
     });
   }
 
@@ -53,22 +61,174 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  Color _previewHue(int hue) {
-    final swatch = swatchForHue(hue);
-    if (swatch != null) return Color(swatch.argb);
-    return HSLColor.fromAHSL(
-      1,
-      hue.toDouble(),
-      kPalettePreviewSaturation,
-      kPalettePreviewLightness,
-    ).toColor();
+  ColorSwatch? get _defaultSwatch {
+    for (final s in _swatches) {
+      if (s.isDefault) return s;
+    }
+    return _swatches.isEmpty ? null : _swatches.first;
+  }
+
+  Color _tagColor(String swatchId) {
+    final swatch = _swatchesById[swatchId] ?? _defaultSwatch;
+    if (swatch == null) return Colors.grey;
+    return Color(swatch.argb);
+  }
+
+  Future<void> _setDefaultSwatch(ColorSwatch swatch) async {
+    if (swatch.isDefault) return;
+    try {
+      await widget.services.tasks.setDefaultSwatch(swatch.id);
+      await _reload();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _message = '设置默认色卡失败：$e');
+    }
+  }
+
+  Future<void> _showSwatchDialog({ColorSwatch? existing}) async {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final defaultArgb = _defaultSwatch?.argb ?? 0xFF457BD9;
+    var argb = existing?.argb ?? defaultArgb;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text(existing == null ? '新建色卡' : '编辑色卡'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: '名称'),
+                autofocus: true,
+              ),
+              const SizedBox(height: 12),
+              ArgbColorField(
+                argb: argb,
+                onChanged: (v) => setLocal(() => argb = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    final name = nameCtrl.text.trim();
+    if (name.isEmpty) return;
+
+    final maxSort = _swatches.isEmpty
+        ? -1
+        : _swatches.map((s) => s.sortOrder).reduce(math.max);
+    final swatch = colorSwatchFromArgb(
+      id: existing?.id ?? const Uuid().v4(),
+      name: name,
+      argb: argb,
+      sortOrder: existing?.sortOrder ?? maxSort + 1,
+      isDefault: existing?.isDefault ?? false,
+      slate: existing?.slate ?? false,
+    );
+    try {
+      await widget.services.tasks.upsertSwatch(swatch);
+      await _reload();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _message = '保存色卡失败：$e');
+    }
+  }
+
+  Future<void> _deleteSwatch(ColorSwatch victim) async {
+    if (_swatches.length <= 1) return;
+
+    final others = _swatches.where((s) => s.id != victim.id).toList();
+    final currentDefault = _defaultSwatch ?? others.first;
+    var rebindToId = victim.isDefault ? others.first.id : currentDefault.id;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text('删除色卡「${victim.name}」？'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('引用该色卡的任务与标签将改绑到：'),
+              const SizedBox(height: 12),
+              InputDecorator(
+                decoration: const InputDecoration(labelText: '改绑目标'),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: rebindToId,
+                    items: [
+                      for (final s in others)
+                        DropdownMenuItem(
+                          value: s.id,
+                          child: Text(
+                            s.id == currentDefault.id && !victim.isDefault
+                                ? '${s.name}（当前默认）'
+                                : s.name,
+                          ),
+                        ),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) setLocal(() => rebindToId = v);
+                    },
+                  ),
+                ),
+              ),
+              if (victim.isDefault) ...[
+                const SizedBox(height: 8),
+                const Text('删除默认色卡后，改绑目标将成为新的默认色卡。'),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('删除'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+
+    try {
+      if (victim.isDefault) {
+        await widget.services.tasks.setDefaultSwatch(rebindToId);
+      }
+      await widget.services.tasks.deleteSwatch(victim.id, rebindToId: rebindToId);
+      await _reload();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _message = '删除色卡失败：$e');
+    }
   }
 
   Future<void> _addTag() async {
     final nameCtrl = TextEditingController();
     var swatchId = farthestSwatchId(
-      kFactoryColorSwatches,
-      [for (final t in _tags) hueForSwatchId(t.swatchId)],
+      _swatches,
+      [
+        for (final t in _tags)
+          if (_swatchesById[t.swatchId] case final swatch?) swatch.hue,
+      ],
     );
     final ok = await showDialog<bool>(
       context: context,
@@ -85,7 +245,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 12),
               SwatchPicker(
-                swatches: kFactoryColorSwatches,
+                swatches: _swatches,
                 swatchId: swatchId,
                 onChanged: (id) => setLocal(() => swatchId = id),
               ),
@@ -195,6 +355,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final sortedSwatches = [..._swatches]
+      ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
       body: ListView(
@@ -263,6 +426,46 @@ class _SettingsPageState extends State<SettingsPage> {
           const SizedBox(height: 16),
           Row(
             children: [
+              Text('色卡', style: Theme.of(context).textTheme.titleMedium),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _swatches.isEmpty ? null : () => _showSwatchDialog(),
+                icon: const Icon(Icons.add),
+                label: const Text('新建'),
+              ),
+            ],
+          ),
+          for (final s in sortedSwatches)
+            ListTile(
+              leading: CircleAvatar(backgroundColor: Color(s.argb)),
+              title: Text(s.name),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: Icon(s.isDefault ? Icons.star : Icons.star_border),
+                    tooltip: '设为默认',
+                    onPressed:
+                        s.isDefault ? null : () => _setDefaultSwatch(s),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined),
+                    tooltip: '编辑',
+                    onPressed: () => _showSwatchDialog(existing: s),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    tooltip: '删除',
+                    onPressed: _swatches.length <= 1
+                        ? null
+                        : () => _deleteSwatch(s),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
               Text('标签', style: Theme.of(context).textTheme.titleMedium),
               const Spacer(),
               TextButton.icon(
@@ -274,9 +477,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           for (final tag in _tags)
             ListTile(
-              leading: CircleAvatar(
-                backgroundColor: _previewHue(hueForSwatchId(tag.swatchId)),
-              ),
+              leading: CircleAvatar(backgroundColor: _tagColor(tag.swatchId)),
               title: Text(tag.name),
               trailing: IconButton(
                 icon: const Icon(Icons.delete_outline),
