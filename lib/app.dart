@@ -1,6 +1,10 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
+
+import 'package:flutter/material.dart' hide ColorSwatch;
 import 'package:sqflite_common/sqlite_api.dart';
 
+import 'domain/gantt/factory_swatches.dart';
+import 'domain/models/color_swatch.dart';
 import 'platform/file_gateway.dart';
 import 'platform/settings_store.dart';
 import 'platform/task_repository.dart';
@@ -22,10 +26,44 @@ class AppServices {
   final FileGateway files;
 }
 
-class GanttDayApp extends StatelessWidget {
+/// Theme seed from settings default swatch (ARGB). Falls back to factory azure.
+Color themeSeedFromSwatches(Iterable<ColorSwatch> swatches) {
+  for (final s in swatches) {
+    if (s.isDefault) return Color(s.argb);
+  }
+  if (swatches.isNotEmpty) return Color(swatches.first.argb);
+  final factory = kFactoryColorSwatches.firstWhere((s) => s.isDefault);
+  return Color(factory.argb);
+}
+
+class GanttDayApp extends StatefulWidget {
   const GanttDayApp({super.key, required this.services});
 
   final AppServices services;
+
+  @override
+  State<GanttDayApp> createState() => _GanttDayAppState();
+}
+
+class _GanttDayAppState extends State<GanttDayApp> {
+  StreamSubscription<List<ColorSwatch>>? _swatchesSub;
+  Color _seedColor = themeSeedFromSwatches(kFactoryColorSwatches);
+
+  @override
+  void initState() {
+    super.initState();
+    _swatchesSub = widget.services.tasks.watchSwatches().listen((swatches) {
+      final next = themeSeedFromSwatches(swatches);
+      if (!mounted || next.toARGB32() == _seedColor.toARGB32()) return;
+      setState(() => _seedColor = next);
+    });
+  }
+
+  @override
+  void dispose() {
+    _swatchesSub?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -36,10 +74,14 @@ class GanttDayApp extends StatelessWidget {
         title: 'GanttDay',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4A6CF7)),
+          // Seed derives the palette; pin primary to the default swatch ARGB
+          // so create frames / nav / buttons match settings exactly.
+          colorScheme: ColorScheme.fromSeed(seedColor: _seedColor).copyWith(
+            primary: _seedColor,
+          ),
           useMaterial3: true,
         ),
-        home: AppShell(services: services),
+        home: AppShell(services: widget.services),
       ),
     );
   }

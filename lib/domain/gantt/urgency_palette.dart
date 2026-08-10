@@ -27,7 +27,7 @@ class TaskPaint {
 }
 
 /// Color rules from spec section 5: linear urgency toward planned end within
-/// a configurable window; overdue caps vividness and adds hatch; completed
+/// a configurable window; overdue unfinished paints gray (no hatch); completed
 /// tasks show a gray planned bar under a single vivid actual bar.
 ///
 /// Palette hues deepen from the swatch's calm S/L toward max vividness.
@@ -68,13 +68,22 @@ class UrgencyPalette {
         ),
       );
     }
-    final windowMin = urgencyWindowDays * WallClock.minutesPerDay;
     final remaining = plannedEnd - now;
-    final overdue = remaining < 0;
+    if (remaining < 0) {
+      // Overdue unfinished: solid gray, same treatment as week/month.
+      return TaskPaint(
+        planned: BarPaint(
+          hue: baseHue,
+          saturation: 0.12,
+          lightness: 0.55,
+          hatchOverdue: false,
+          isPlannedGray: true,
+        ),
+      );
+    }
+    final windowMin = urgencyWindowDays * WallClock.minutesPerDay;
     final double t; // 0 = calm, 1 = max urgency (linear within window)
-    if (overdue) {
-      t = 1;
-    } else if (remaining >= windowMin) {
+    if (remaining >= windowMin) {
       t = 0;
     } else {
       t = 1 - (remaining / windowMin);
@@ -88,7 +97,7 @@ class UrgencyPalette {
         hue: baseHue,
         saturation: sat,
         lightness: light,
-        hatchOverdue: overdue,
+        hatchOverdue: false,
         isPlannedGray: false,
       ),
     );

@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart' hide ColorSwatch;
 import 'package:uuid/uuid.dart';
 
@@ -9,8 +7,8 @@ import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/models/app_settings.dart';
 import '../../domain/models/color_swatch.dart';
 import '../../domain/models/tag.dart';
-import '../common/argb_color_field.dart';
 import '../common/swatch_picker.dart';
+import 'swatch_inline_host.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.services});
@@ -85,68 +83,6 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  Future<void> _showSwatchDialog({ColorSwatch? existing}) async {
-    final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final defaultArgb = _defaultSwatch?.argb ?? 0xFF457BD9;
-    var argb = existing?.argb ?? defaultArgb;
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: Text(existing == null ? '新建色卡' : '编辑色卡'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: '名称'),
-                autofocus: true,
-              ),
-              const SizedBox(height: 12),
-              ArgbColorField(
-                argb: argb,
-                onChanged: (v) => setLocal(() => argb = v),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('保存'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (ok != true) return;
-    final name = nameCtrl.text.trim();
-    if (name.isEmpty) return;
-
-    final maxSort = _swatches.isEmpty
-        ? -1
-        : _swatches.map((s) => s.sortOrder).reduce(math.max);
-    final swatch = colorSwatchFromArgb(
-      id: existing?.id ?? const Uuid().v4(),
-      name: name,
-      argb: argb,
-      sortOrder: existing?.sortOrder ?? maxSort + 1,
-      isDefault: existing?.isDefault ?? false,
-      slate: existing?.slate ?? false,
-    );
-    try {
-      await widget.services.tasks.upsertSwatch(swatch);
-      await _reload();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _message = '保存色卡失败：$e');
-    }
-  }
-
   Future<void> _deleteSwatch(ColorSwatch victim) async {
     if (_swatches.length <= 1) return;
 
@@ -158,12 +94,21 @@ class _SettingsPageState extends State<SettingsPage> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: Text('删除色卡「${victim.name}」？'),
+          title: const Text('删除色卡？'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('引用该色卡的任务与标签将改绑到：'),
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 14,
+                    backgroundColor: Color(victim.argb),
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(child: Text('引用该色卡的任务与标签将改绑到：')),
+                ],
+              ),
               const SizedBox(height: 12),
               InputDecorator(
                 decoration: const InputDecoration(labelText: '改绑目标'),
@@ -175,10 +120,18 @@ class _SettingsPageState extends State<SettingsPage> {
                       for (final s in others)
                         DropdownMenuItem(
                           value: s.id,
-                          child: Text(
-                            s.id == currentDefault.id && !victim.isDefault
-                                ? '${s.name}（当前默认）'
-                                : s.name,
+                          child: Row(
+                            children: [
+                              CircleAvatar(
+                                radius: 10,
+                                backgroundColor: Color(s.argb),
+                              ),
+                              if (s.id == currentDefault.id &&
+                                  !victim.isDefault) ...[
+                                const SizedBox(width: 8),
+                                const Text('当前默认'),
+                              ],
+                            ],
                           ),
                         ),
                     ],
@@ -358,156 +311,152 @@ class _SettingsPageState extends State<SettingsPage> {
     final sortedSwatches = [..._swatches]
       ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('设置')),
-      body: ListView(
-        padding: const EdgeInsets.all(24),
-        children: [
-          Text('可视时段', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: InputDecorator(
-                  decoration: const InputDecoration(labelText: '开始小时'),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<int>(
-                      isExpanded: true,
-                      value: _settings.visibleStartHour,
-                      items: [
-                        for (var h = 0; h < 24; h++)
-                          DropdownMenuItem(value: h, child: Text('$h:00')),
-                      ],
-                      onChanged: (v) {
-                        if (v == null || v >= _settings.visibleEndHour) return;
-                        _write(_settings.copyWith(visibleStartHour: v));
-                      },
-                    ),
-                  ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+          child: Text(
+            '设置',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
                 ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: InputDecorator(
-                  decoration: const InputDecoration(labelText: '结束小时'),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<int>(
-                      isExpanded: true,
-                      value: _settings.visibleEndHour,
-                      items: [
-                        for (var h = 1; h <= 24; h++)
-                          DropdownMenuItem(
-                              value: h,
-                              child: Text(h == 24 ? '24:00' : '$h:00')),
-                      ],
-                      onChanged: (v) {
-                        if (v == null || v <= _settings.visibleStartHour) {
-                          return;
-                        }
-                        _write(_settings.copyWith(visibleEndHour: v));
-                      },
-                    ),
-                  ),
-                ),
-              ),
-            ],
           ),
-          const SizedBox(height: 24),
-          Text('紧迫窗口（天）', style: Theme.of(context).textTheme.titleMedium),
-          Slider(
-            value: _settings.urgencyWindowDays.toDouble().clamp(1, 30),
-            min: 1,
-            max: 30,
-            divisions: 29,
-            label: '${_settings.urgencyWindowDays}',
-            onChanged: (v) =>
-                _write(_settings.copyWith(urgencyWindowDays: v.round())),
-          ),
-          const SizedBox(height: 16),
-          Row(
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.all(20),
             children: [
-              Text('色卡', style: Theme.of(context).textTheme.titleMedium),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: _swatches.isEmpty ? null : () => _showSwatchDialog(),
-                icon: const Icon(Icons.add),
-                label: const Text('新建'),
-              ),
-            ],
-          ),
-          for (final s in sortedSwatches)
-            ListTile(
-              leading: CircleAvatar(backgroundColor: Color(s.argb)),
-              title: Text(s.name),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
+              Text('可视时段', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              Row(
                 children: [
-                  IconButton(
-                    icon: Icon(s.isDefault ? Icons.star : Icons.star_border),
-                    tooltip: '设为默认',
-                    onPressed:
-                        s.isDefault ? null : () => _setDefaultSwatch(s),
+                  Expanded(
+                    child: InputDecorator(
+                      decoration: const InputDecoration(labelText: '开始小时'),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<int>(
+                          isExpanded: true,
+                          value: _settings.visibleStartHour,
+                          items: [
+                            for (var h = 0; h < 24; h++)
+                              DropdownMenuItem(value: h, child: Text('$h:00')),
+                          ],
+                          onChanged: (v) {
+                            if (v == null || v >= _settings.visibleEndHour) {
+                              return;
+                            }
+                            _write(_settings.copyWith(visibleStartHour: v));
+                          },
+                        ),
+                      ),
+                    ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined),
-                    tooltip: '编辑',
-                    onPressed: () => _showSwatchDialog(existing: s),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline),
-                    tooltip: '删除',
-                    onPressed: _swatches.length <= 1
-                        ? null
-                        : () => _deleteSwatch(s),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: InputDecorator(
+                      decoration: const InputDecoration(labelText: '结束小时'),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<int>(
+                          isExpanded: true,
+                          value: _settings.visibleEndHour,
+                          items: [
+                            for (var h = 1; h <= 24; h++)
+                              DropdownMenuItem(
+                                  value: h,
+                                  child:
+                                      Text(h == 24 ? '24:00' : '$h:00')),
+                          ],
+                          onChanged: (v) {
+                            if (v == null || v <= _settings.visibleStartHour) {
+                              return;
+                            }
+                            _write(_settings.copyWith(visibleEndHour: v));
+                          },
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),
-            ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Text('标签', style: Theme.of(context).textTheme.titleMedium),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: _addTag,
-                icon: const Icon(Icons.add),
-                label: const Text('新建'),
+              const SizedBox(height: 24),
+              Text('紧迫窗口（天）',
+                  style: Theme.of(context).textTheme.titleMedium),
+              Slider(
+                value: _settings.urgencyWindowDays.toDouble().clamp(1, 30),
+                min: 1,
+                max: 30,
+                divisions: 29,
+                label: '${_settings.urgencyWindowDays}',
+                onChanged: (v) =>
+                    _write(_settings.copyWith(urgencyWindowDays: v.round())),
               ),
+              const SizedBox(height: 16),
+              SwatchInlineHost(
+                swatches: sortedSwatches,
+                defaultArgb: _defaultSwatch?.argb ?? 0xFF457BD9,
+                onUpsert: (swatch) async {
+                  try {
+                    await widget.services.tasks.upsertSwatch(swatch);
+                    await _reload();
+                  } catch (e) {
+                    if (!mounted) rethrow;
+                    setState(() => _message = '保存色卡失败：$e');
+                    rethrow;
+                  }
+                },
+                onSetDefault: _setDefaultSwatch,
+                onDelete: _deleteSwatch,
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Text('标签', style: Theme.of(context).textTheme.titleMedium),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _addTag,
+                    icon: const Icon(Icons.add),
+                    label: const Text('新建'),
+                  ),
+                ],
+              ),
+              for (final tag in _tags)
+                ListTile(
+                  leading:
+                      CircleAvatar(backgroundColor: _tagColor(tag.swatchId)),
+                  title: Text(tag.name),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => _deleteTag(tag),
+                  ),
+                ),
+              const SizedBox(height: 24),
+              Text('备份', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  FilledButton.icon(
+                    onPressed: _busy ? null : _export,
+                    icon: const Icon(Icons.upload_file),
+                    label: const Text('导出'),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _import,
+                    icon: const Icon(Icons.download),
+                    label: const Text('导入'),
+                  ),
+                ],
+              ),
+              if (_message != null) ...[
+                const SizedBox(height: 16),
+                Text(_message!),
+              ],
             ],
           ),
-          for (final tag in _tags)
-            ListTile(
-              leading: CircleAvatar(backgroundColor: _tagColor(tag.swatchId)),
-              title: Text(tag.name),
-              trailing: IconButton(
-                icon: const Icon(Icons.delete_outline),
-                onPressed: () => _deleteTag(tag),
-              ),
-            ),
-          const SizedBox(height: 24),
-          Text('备份', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              FilledButton.icon(
-                onPressed: _busy ? null : _export,
-                icon: const Icon(Icons.upload_file),
-                label: const Text('导出'),
-              ),
-              const SizedBox(width: 12),
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _import,
-                icon: const Icon(Icons.download),
-                label: const Text('导入'),
-              ),
-            ],
-          ),
-          if (_message != null) ...[
-            const SizedBox(height: 16),
-            Text(_message!),
-          ],
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

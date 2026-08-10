@@ -5,6 +5,7 @@ import 'package:flutter/material.dart' hide ColorSwatch;
 import '../../app.dart';
 import '../../domain/gantt/factory_swatches.dart';
 import '../../domain/gantt/swatch_resolve.dart';
+import '../../domain/gantt/tag_filter.dart';
 import '../../domain/gantt/urgency_palette.dart';
 import '../../domain/models/color_swatch.dart';
 import '../../domain/models/tag.dart';
@@ -21,11 +22,13 @@ class MonthPage extends StatefulWidget {
     required this.services,
     required this.month,
     required this.onOpenDay,
+    this.filterTagIds = const {},
   });
 
   final AppServices services;
   final DateTime month;
   final void Function(DateTime day) onOpenDay;
+  final Set<String> filterTagIds;
 
   @override
   State<MonthPage> createState() => _MonthPageState();
@@ -41,7 +44,9 @@ class _MonthPageState extends State<MonthPage> {
   StreamSubscription<List<ColorSwatch>>? _swatchesSub;
   List<Task> _tasks = const [];
   Map<String, Tag> _tags = const {};
+  Map<String, List<String>> _taskTagIds = const {};
   Map<String, ColorSwatch> _swatchesById = const {};
+  int _tasksLoadEpoch = 0;
 
   DateTime get _monthStart =>
       DateTime(widget.month.year, widget.month.month, 1);
@@ -64,21 +69,32 @@ class _MonthPageState extends State<MonthPage> {
   @override
   void didUpdateWidget(MonthPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.month != widget.month) _subscribe();
+    if (oldWidget.month != widget.month) {
+      _subscribe();
+    } else if (oldWidget.filterTagIds != widget.filterTagIds) {
+      setState(() {});
+    }
   }
 
   void _subscribe() {
     _tasksSub?.cancel();
+    _tasksLoadEpoch++;
     final start = WallClock.minutes(_monthStart);
     final end = WallClock.minutes(_monthEndExclusive);
     _tasksSub = widget.services.tasks
         .watchTasksOverlapping(start, end)
         .listen((tasks) async {
+      final epoch = ++_tasksLoadEpoch;
       final tags = await widget.services.tasks.listTags();
-      if (!mounted) return;
+      final tagIds = <String, List<String>>{};
+      for (final t in tasks) {
+        tagIds[t.id] = await widget.services.tasks.tagIdsForTask(t.id);
+      }
+      if (!mounted || epoch != _tasksLoadEpoch) return;
       setState(() {
         _tasks = tasks;
         _tags = {for (final t in tags) t.id: t};
+        _taskTagIds = tagIds;
       });
     });
   }
@@ -120,9 +136,18 @@ class _MonthPageState extends State<MonthPage> {
 
   @override
   Widget build(BuildContext context) {
+    final filtered = _tasks
+        .where(
+          (t) => taskMatchesTagFilter(
+            primaryTagId: t.primaryTagId,
+            attachedTagIds: _taskTagIds[t.id] ?? const <String>[],
+            filterTagIds: widget.filterTagIds,
+          ),
+        )
+        .toList();
     final selected = selectVisibleMonthTasks(
       month: _monthStart,
-      tasks: _tasks,
+      tasks: filtered,
     );
     final weeks = buildMonthWeekLayouts(
       month: _monthStart,
@@ -150,19 +175,53 @@ class _MonthPageState extends State<MonthPage> {
         ),
         const Divider(height: 1),
         Expanded(
-          child: ListView.builder(
-            itemCount: weeks.length,
-            itemBuilder: (context, index) {
-              final week = weeks[index];
-              return _WeekRow(
-                week: week,
-                month: _monthStart,
-                barHeight: _barHeight,
-                barGap: _barGap,
-                dayHeaderHeight: _dayHeaderHeight,
-                minBarWidth: _minBarWidth,
-                paintFor: (id) => _paintFor(byId[id]!),
-                onOpenDay: widget.onOpenDay,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final weekCount = weeks.length;
+              if (weekCount == 0) return const SizedBox.shrink();
+
+              final equalHeight = constraints.maxHeight / weekCount;
+              final minHeights = <double>[
+                for (final week in weeks)
+                  _dayHeaderHeight +
+                      week.laneCount * (_barHeight + _barGap) +
+                      4,
+              ];
+              final needsScroll =
+                  minHeights.any((h) => h > equalHeight + 0.5);
+
+              Widget weekRow(int index, double height) {
+                return _WeekRow(
+                  week: weeks[index],
+                  month: _monthStart,
+                  rowHeight: height,
+                  barHeight: _barHeight,
+                  barGap: _barGap,
+                  dayHeaderHeight: _dayHeaderHeight,
+                  minBarWidth: _minBarWidth,
+                  paintFor: (id) => _paintFor(byId[id]!),
+                  onOpenDay: widget.onOpenDay,
+                );
+              }
+
+              if (needsScroll) {
+                return ListView.builder(
+                  itemCount: weekCount,
+                  itemBuilder: (context, index) =>
+                      weekRow(index, minHeights[index]),
+                );
+              }
+
+              // Equal-height weeks fill the viewport (calendar grid).
+              return Column(
+                children: [
+                  for (var i = 0; i < weekCount; i++)
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, c) => weekRow(i, c.maxHeight),
+                      ),
+                    ),
+                ],
               );
             },
           ),
@@ -176,6 +235,7 @@ class _WeekRow extends StatelessWidget {
   const _WeekRow({
     required this.week,
     required this.month,
+    required this.rowHeight,
     required this.barHeight,
     required this.barGap,
     required this.dayHeaderHeight,
@@ -186,6 +246,7 @@ class _WeekRow extends StatelessWidget {
 
   final MonthWeekLayout week;
   final DateTime month;
+  final double rowHeight;
   final double barHeight;
   final double barGap;
   final double dayHeaderHeight;
@@ -203,36 +264,36 @@ class _WeekRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final lanes = week.laneCount;
-    final barsHeight = lanes * (barHeight + barGap) + 4;
-    final rowHeight = dayHeaderHeight + barsHeight;
-
     return SizedBox(
       height: rowHeight,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final w = constraints.maxWidth;
+          final h = constraints.maxHeight;
           final cellW = w / 7;
 
           return Stack(
             children: [
-              Row(
-                children: [
-                  for (final day in week.days)
-                    Expanded(
-                      child: _DayCell(
-                        day: day,
-                        inMonth: _inMonth(day),
-                        isToday: _isToday(day),
-                        overflow: _inMonth(day)
-                            ? week.overflowByDay[day.day] ?? 0
-                            : 0,
-                        onTap: _inMonth(day)
-                            ? () => onOpenDay(day)
-                            : null,
+              Positioned.fill(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final day in week.days)
+                      Expanded(
+                        child: _DayCell(
+                          day: day,
+                          inMonth: _inMonth(day),
+                          isToday: _isToday(day),
+                          overflow: _inMonth(day)
+                              ? week.overflowByDay[day.day] ?? 0
+                              : 0,
+                          onTap: _inMonth(day)
+                              ? () => onOpenDay(day)
+                              : null,
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
               for (final bar in week.bars)
                 Builder(
@@ -311,7 +372,7 @@ class _WeekRow extends StatelessWidget {
               IgnorePointer(
                 child: ExcludeSemantics(
                   child: CustomPaint(
-                    size: Size(w, rowHeight),
+                    size: Size(w, h),
                     painter: _WeekGridPainter(cellW: cellW),
                   ),
                 ),

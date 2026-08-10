@@ -47,7 +47,7 @@ void main() {
     expect(at35, closeTo(half, 1e-9));
   });
 
-  test('overdue unfinished hits max vivid and hatch, capped forever', () {
+  test('overdue unfinished is solid gray without hatch', () {
     final end = WallClock.minutes(DateTime(2026, 8, 8, 12));
     final justOver = UrgencyPalette.paint(
       base: azure,
@@ -65,9 +65,12 @@ void main() {
       isDone: false,
       urgencyWindowDays: 7,
     );
-    expect(justOver.planned.saturation, 1.0);
-    expect(justOver.planned.hatchOverdue, true);
-    expect(wayOver.planned.saturation, 1.0);
+    expect(justOver.planned.isPlannedGray, true);
+    expect(justOver.planned.hatchOverdue, false);
+    expect(justOver.planned.saturation, 0.12);
+    expect(justOver.planned.lightness, 0.55);
+    expect(wayOver.planned.isPlannedGray, true);
+    expect(wayOver.planned.hatchOverdue, false);
     expect(wayOver.planned.lightness, justOver.planned.lightness);
   });
 

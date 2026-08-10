@@ -7,9 +7,10 @@ import '../../domain/models/color_swatch.dart';
 import '../../domain/gantt/gantt_geometry.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
+import '../../domain/time/inline_datetime.dart';
 import '../../domain/time/wall_clock.dart';
 import '../common/swatch_picker.dart';
-import '../complete/complete_dialog.dart';
+import 'plan_datetime_accordion.dart';
 
 /// Create / edit a task. Validates end > start before saving.
 class TaskFormPage extends StatefulWidget {
@@ -35,6 +36,11 @@ class TaskFormPage extends StatefulWidget {
 class _TaskFormPageState extends State<TaskFormPage> {
   late final TextEditingController _title;
   late final TextEditingController _notes;
+  late final TextEditingController _planYear;
+  late final TextEditingController _planMonth;
+  late final TextEditingController _planDay;
+  late final TextEditingController _planHour;
+  late final TextEditingController _planMinute;
   late DateTime _start;
   late DateTime _end;
   String? _primaryTagId;
@@ -44,6 +50,8 @@ class _TaskFormPageState extends State<TaskFormPage> {
   List<String> _tagIds = const [];
   String? _error;
   bool _saving = false;
+  PlanEditorTarget _planEditor = PlanEditorTarget.none;
+  String? _planEditorError;
 
   bool get _isEdit => widget.existing != null;
 
@@ -70,6 +78,11 @@ class _TaskFormPageState extends State<TaskFormPage> {
           ? WallClock.dateTime(widget.initialEnd!)
           : day.add(const Duration(hours: 1));
     }
+    _planYear = TextEditingController();
+    _planMonth = TextEditingController();
+    _planDay = TextEditingController();
+    _planHour = TextEditingController();
+    _planMinute = TextEditingController();
     _loadTags();
   }
 
@@ -109,62 +122,101 @@ class _TaskFormPageState extends State<TaskFormPage> {
   void dispose() {
     _title.dispose();
     _notes.dispose();
+    _planYear.dispose();
+    _planMonth.dispose();
+    _planDay.dispose();
+    _planHour.dispose();
+    _planMinute.dispose();
     super.dispose();
   }
 
-  Future<void> _pickDateTime({required bool isStart}) async {
-    final current = isStart ? _start : _end;
-    final date = await showDatePicker(
-      context: context,
-      initialDate: current,
-      firstDate: DateTime(1970),
-      lastDate: DateTime(2100),
+  void _fillPlanEditors(DateTime dt) {
+    _planYear.text = '${dt.year}';
+    _planMonth.text = dt.month.toString().padLeft(2, '0');
+    _planDay.text = dt.day.toString().padLeft(2, '0');
+    _planHour.text = dt.hour.toString().padLeft(2, '0');
+    _planMinute.text = dt.minute.toString().padLeft(2, '0');
+  }
+
+  /// Commits open plan editor. Returns false if invalid (stays open).
+  bool _commitPlanEditor() {
+    if (_planEditor == PlanEditorTarget.none) return true;
+    final parsed = InlineDateTimeParse.tryParse(
+      year: _planYear.text,
+      month: _planMonth.text,
+      day: _planDay.text,
+      hour: _planHour.text,
+      minute: _planMinute.text,
     );
-    if (date == null || !mounted) return;
-    final time = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(current),
-    );
-    if (time == null || !mounted) return;
-    // Snap to nearest 15 minutes for consistency with the Gantt.
-    final minutes = time.hour * 60 + time.minute;
-    final snapped = ((minutes + 7) ~/ 15) * 15;
-    final dt = DateTime(
-      date.year,
-      date.month,
-      date.day,
-      snapped ~/ 60,
-      snapped % 60,
-    );
+    if (parsed.value == null) {
+      setState(() => _planEditorError = parsed.error ?? '日期无效');
+      return false;
+    }
     setState(() {
-      if (isStart) {
-        _start = dt;
+      if (_planEditor == PlanEditorTarget.start) {
+        _start = parsed.value!;
       } else {
-        _end = dt;
+        _end = parsed.value!;
       }
-      _error = null;
+      _planEditor = PlanEditorTarget.none;
+      _planEditorError = null;
     });
+    return true;
+  }
+
+  void _openPlanEditor(PlanEditorTarget target) {
+    final dt = target == PlanEditorTarget.start ? _start : _end;
+    _fillPlanEditors(dt);
+    setState(() {
+      _planEditor = target;
+      _planEditorError = null;
+    });
+  }
+
+  void _onTapPlanStart() {
+    if (_planEditor == PlanEditorTarget.start) {
+      _commitPlanEditor();
+      return;
+    }
+    if (_planEditor == PlanEditorTarget.end) {
+      if (!_commitPlanEditor()) return;
+    }
+    _openPlanEditor(PlanEditorTarget.start);
+  }
+
+  void _onTapPlanEnd() {
+    if (_planEditor == PlanEditorTarget.end) {
+      _commitPlanEditor();
+      return;
+    }
+    if (_planEditor == PlanEditorTarget.start) {
+      if (!_commitPlanEditor()) return;
+    }
+    _openPlanEditor(PlanEditorTarget.end);
   }
 
   String _fmt(DateTime dt) =>
       '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
       '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
 
-  Future<void> _save() async {
+  /// Saves and closes the drawer on success. Returns false if validation /
+  /// persistence failed (drawer stays open).
+  Future<bool> _save() async {
+    if (!_commitPlanEditor()) return false;
     final title = _title.text.trim();
     if (title.isEmpty) {
       setState(() => _error = '请填写任务名');
-      return;
+      return false;
     }
     final start = WallClock.minutes(_start);
     final end = WallClock.minutes(_end);
     if (end <= start) {
       setState(() => _error = '结束时间必须晚于开始时间');
-      return;
+      return false;
     }
     if (end < start + GanttGeometry.minDurationMinutes) {
       setState(() => _error = '最短时长为 15 分钟');
-      return;
+      return false;
     }
 
     setState(() {
@@ -203,43 +255,16 @@ class _TaskFormPageState extends State<TaskFormPage> {
       }
       await widget.services.tasks.upsert(task);
       await widget.services.tasks.setTaskTags(task.id, _tagIds);
-      if (!mounted) return;
+      if (!mounted) return false;
       Navigator.of(context).pop(task);
+      return true;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _saving = false;
         _error = '保存失败：$e';
       });
-    }
-  }
-
-  Future<void> _markComplete() async {
-    final existing = widget.existing!;
-    final result = await showCompleteDialog(context, task: existing);
-    if (result == null || !mounted) return;
-    try {
-      await widget.services.tasks.complete(
-        existing.id,
-        actualStart: result.start,
-        actualEnd: result.end,
-      );
-      if (!mounted) return;
-      Navigator.of(context).pop();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _error = '标记完成失败：$e');
-    }
-  }
-
-  Future<void> _uncomplete() async {
-    try {
-      await widget.services.tasks.uncomplete(widget.existing!.id);
-      if (!mounted) return;
-      Navigator.of(context).pop();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _error = '撤销完成失败：$e');
+      return false;
     }
   }
 
@@ -267,166 +292,183 @@ class _TaskFormPageState extends State<TaskFormPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_isEdit ? '编辑任务' : '新建任务'),
-        actions: [
-          if (_isEdit)
-            IconButton(
-              icon: const Icon(Icons.delete_outline),
-              tooltip: '',
-              onPressed: _saving ? null : _delete,
-            ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(24),
-        children: [
-          TextField(
-            controller: _title,
-            decoration: const InputDecoration(
-              labelText: '任务名',
-              border: OutlineInputBorder(),
-            ),
-            autofocus: !_isEdit,
-          ),
-          const SizedBox(height: 16),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('计划开始'),
-            subtitle: Text(_fmt(_start)),
-            trailing: const Icon(Icons.schedule),
-            onTap: () => _pickDateTime(isStart: true),
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('计划结束'),
-            subtitle: Text(_fmt(_end)),
-            trailing: const Icon(Icons.schedule),
-            onTap: () => _pickDateTime(isStart: false),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _notes,
-            maxLines: 4,
-            decoration: const InputDecoration(
-              labelText: '备注',
-              border: OutlineInputBorder(),
-              alignLabelWithHint: true,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text('主标签（决定颜色）', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+    final theme = Theme.of(context);
+    // Barrier / system back → save then close (Navigator.pop still works for
+    // delete/complete which call pop directly).
+    // Material required for TextFields when hosted outside Scaffold
+    // (e.g. accidental MaterialPageRoute). Side drawer already provides one.
+    return Material(
+      color: theme.colorScheme.surface,
+      child: PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop || _saving) return;
+        await _save();
+      },
+      child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
+          child: Row(
             children: [
-              ChoiceChip(
-                label: const Text('无'),
-                selected: _primaryTagId == null,
-                onSelected: (_) => setState(() => _primaryTagId = null),
-              ),
-              for (final tag in _tags)
-                ChoiceChip(
-                  label: Text(tag.name),
-                  selected: _primaryTagId == tag.id,
-                  avatar: CircleAvatar(
-                    backgroundColor: _tagColor(tag.swatchId),
-                    radius: 8,
+              Expanded(
+                child: Text(
+                  _isEdit ? '编辑任务' : '新建任务',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
                   ),
-                  onSelected: (_) => setState(() {
-                    _primaryTagId = tag.id;
-                    if (!_tagIds.contains(tag.id)) {
-                      _tagIds = [..._tagIds, tag.id];
-                    }
-                  }),
+                ),
+              ),
+              if (_isEdit)
+                IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  tooltip: '',
+                  onPressed: _saving ? null : _delete,
                 ),
             ],
           ),
-          if (_tags.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text('附加标签', style: Theme.of(context).textTheme.titleSmall),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final tag in _tags)
-                  FilterChip(
-                    label: Text(tag.name),
-                    selected: _tagIds.contains(tag.id),
-                    onSelected: (sel) => setState(() {
-                      if (sel) {
-                        _tagIds = [..._tagIds, tag.id];
-                      } else {
-                        _tagIds =
-                            _tagIds.where((id) => id != tag.id).toList();
-                        if (_primaryTagId == tag.id) _primaryTagId = null;
-                      }
-                    }),
-                  ),
-              ],
-            ),
-          ],
-          const SizedBox(height: 16),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('手动覆盖颜色'),
-            value: _overrideSwatchId != null,
-            onChanged: (on) => setState(() {
-              _overrideSwatchId = on
-                  ? (_overrideSwatchId ??
-                      farthestSwatchId(
-                        _swatches,
-                        [
-                          for (final t in _tags)
-                            if (_swatchesById[t.swatchId] case final swatch?)
-                              swatch.hue,
-                        ],
-                      ))
-                  : null;
-            }),
-          ),
-          if (_overrideSwatchId != null)
-            SwatchPicker(
-              swatches: _swatches,
-              swatchId: _overrideSwatchId!,
-              onChanged: (id) => setState(() => _overrideSwatchId = id),
-            ),
-          if (_error != null) ...[
-            const SizedBox(height: 8),
-            Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-          ],
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: _saving ? null : _save,
-            child: Text(_saving ? '保存中…' : '保存'),
-          ),
-          if (_isEdit) ...[
-            const SizedBox(height: 12),
-            if (!widget.existing!.isDone)
-              OutlinedButton.icon(
-                onPressed: _saving ? null : _markComplete,
-                icon: const Icon(Icons.check_circle_outline),
-                label: const Text('标记完成'),
-              )
-            else ...[
-              OutlinedButton.icon(
-                onPressed: _saving ? null : _markComplete,
-                icon: const Icon(Icons.edit_calendar_outlined),
-                label: const Text('修改实际时间'),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              TextField(
+                controller: _title,
+                decoration: const InputDecoration(
+                  labelText: '任务名',
+                  border: OutlineInputBorder(),
+                ),
+                autofocus: !_isEdit,
+              ),
+              const SizedBox(height: 16),
+              PlanDatetimeAccordion(
+                startLabel: _fmt(_start),
+                endLabel: _fmt(_end),
+                target: _planEditor,
+                year: _planYear,
+                month: _planMonth,
+                day: _planDay,
+                hour: _planHour,
+                minute: _planMinute,
+                error: _planEditorError,
+                onTapStart: _onTapPlanStart,
+                onTapEnd: _onTapPlanEnd,
+                onConfirm: _commitPlanEditor,
               ),
               const SizedBox(height: 8),
-              TextButton.icon(
-                onPressed: _saving ? null : _uncomplete,
-                icon: const Icon(Icons.undo),
-                label: const Text('撤销完成'),
+              TextField(
+                controller: _notes,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: '备注',
+                  border: OutlineInputBorder(),
+                  alignLabelWithHint: true,
+                ),
               ),
+              const SizedBox(height: 16),
+              Text('主标签（决定颜色）',
+                  style: theme.textTheme.titleSmall),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ChoiceChip(
+                    label: const Text('无'),
+                    selected: _primaryTagId == null,
+                    onSelected: (_) => setState(() => _primaryTagId = null),
+                  ),
+                  for (final tag in _tags)
+                    ChoiceChip(
+                      label: Text(tag.name),
+                      selected: _primaryTagId == tag.id,
+                      avatar: CircleAvatar(
+                        backgroundColor: _tagColor(tag.swatchId),
+                        radius: 8,
+                      ),
+                      onSelected: (_) => setState(() {
+                        _primaryTagId = tag.id;
+                        if (!_tagIds.contains(tag.id)) {
+                          _tagIds = [..._tagIds, tag.id];
+                        }
+                      }),
+                    ),
+                ],
+              ),
+              if (_tags.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text('附加标签', style: theme.textTheme.titleSmall),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final tag in _tags)
+                      FilterChip(
+                        label: Text(tag.name),
+                        selected: _tagIds.contains(tag.id),
+                        onSelected: (sel) => setState(() {
+                          if (sel) {
+                            _tagIds = [..._tagIds, tag.id];
+                          } else {
+                            _tagIds =
+                                _tagIds.where((id) => id != tag.id).toList();
+                            if (_primaryTagId == tag.id) {
+                              _primaryTagId = null;
+                            }
+                          }
+                        }),
+                      ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 16),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('手动覆盖颜色'),
+                value: _overrideSwatchId != null,
+                onChanged: (on) => setState(() {
+                  _overrideSwatchId = on
+                      ? (_overrideSwatchId ??
+                          farthestSwatchId(
+                            _swatches,
+                            [
+                              for (final t in _tags)
+                                if (_swatchesById[t.swatchId]
+                                    case final swatch?)
+                                  swatch.hue,
+                            ],
+                          ))
+                      : null;
+                }),
+              ),
+              if (_overrideSwatchId != null)
+                SwatchPicker(
+                  swatches: _swatches,
+                  swatchId: _overrideSwatchId!,
+                  onChanged: (id) => setState(() => _overrideSwatchId = id),
+                ),
             ],
-          ],
+          ),
+        ),
+        if (_error != null) ...[
+          const Divider(height: 1),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+              child: Text(
+                _error!,
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+            ),
+          ),
         ],
-      ),
+      ],
+    ),
+    ),
     );
   }
 }
