@@ -8,7 +8,7 @@ import '../../domain/gantt/factory_swatches.dart';
 import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/models/app_settings.dart';
 import '../../domain/models/tag.dart';
-import '../common/hue_picker.dart';
+import '../common/swatch_picker.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.services});
@@ -70,7 +70,6 @@ class _SettingsPageState extends State<SettingsPage> {
       kFactoryColorSwatches,
       [for (final t in _tags) hueForSwatchId(t.swatchId)],
     );
-    var hue = hueForSwatchId(swatchId);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -85,12 +84,10 @@ class _SettingsPageState extends State<SettingsPage> {
                 autofocus: true,
               ),
               const SizedBox(height: 12),
-              HuePicker(
-                hue: hue,
-                onChanged: (v) => setLocal(() {
-                  hue = v;
-                  swatchId = swatchIdForHue(v);
-                }),
+              SwatchPicker(
+                swatches: kFactoryColorSwatches,
+                swatchId: swatchId,
+                onChanged: (id) => setLocal(() => swatchId = id),
               ),
             ],
           ),

@@ -8,7 +8,7 @@ import '../../domain/gantt/gantt_geometry.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
-import '../common/hue_picker.dart';
+import '../common/swatch_picker.dart';
 import '../complete/complete_dialog.dart';
 
 /// Create / edit a task. Validates end > start before saving.
@@ -373,10 +373,10 @@ class _TaskFormPageState extends State<TaskFormPage> {
             }),
           ),
           if (_overrideSwatchId != null)
-            HuePicker(
-              hue: hueForSwatchId(_overrideSwatchId!),
-              onChanged: (v) =>
-                  setState(() => _overrideSwatchId = swatchIdForHue(v)),
+            SwatchPicker(
+              swatches: kFactoryColorSwatches,
+              swatchId: _overrideSwatchId!,
+              onChanged: (id) => setState(() => _overrideSwatchId = id),
             ),
           if (_error != null) ...[
             const SizedBox(height: 8),
