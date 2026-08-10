@@ -166,6 +166,76 @@ void main() {
     expect(tag.swatchId, custom.single.id);
   });
 
+  test('malformed v1 backup is rejected without applying anything', () async {
+    await seed();
+    const badV1 = '''
+{
+  "version": 1,
+  "exportedAt": 1,
+  "tasks": [{
+    "id": "t-bad",
+    "title": "x",
+    "planned_start": 200,
+    "planned_end": 100,
+    "auto_hue": 218,
+    "created_at": 1,
+    "is_done": false
+  }],
+  "tags": [{
+    "id": "tg-ok",
+    "name": "ok",
+    "hue": 150
+  }],
+  "settings": {
+    "visible_start_hour": 8,
+    "visible_end_hour": 22,
+    "urgency_window_days": 7
+  }
+}
+''';
+
+    expect(
+      () => backup.importJson(badV1),
+      throwsA(isA<BackupValidationException>()),
+    );
+
+    expect(await repo.getById('t-bad'), isNull);
+    expect((await repo.listTags()).any((t) => t.id == 'tg-ok'), isFalse);
+    expect(await repo.getById('t1'), isNotNull);
+    final s = await settings.read();
+    expect(s.visibleStartHour, 7);
+    expect(s.urgencyWindowDays, 5);
+  });
+
+  test('malformed v1 backup on empty db leaves no imports', () async {
+    const badV1 = '''
+{
+  "version": 1,
+  "exportedAt": 1,
+  "tasks": [{"id": "x"}],
+  "tags": [],
+  "settings": {
+    "visible_start_hour": 8,
+    "visible_end_hour": 22,
+    "urgency_window_days": 7
+  }
+}
+''';
+
+    expect(
+      () => backup.importJson(badV1),
+      throwsA(isA<BackupValidationException>()),
+    );
+
+    expect(await repo.listTags(), isEmpty);
+    expect(
+      await db.query('task'),
+      isEmpty,
+    );
+    final s = await settings.read();
+    expect(s.visibleStartHour, AppSettings().visibleStartHour);
+  });
+
   test('duplicate task ids are skipped and counted', () async {
     await seed();
     final json = await backup.exportJson();

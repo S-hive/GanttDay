@@ -214,118 +214,49 @@ class BackupService {
     final problems = <String>[];
 
     final parsedSettings = _parseSettings(settingsRaw, problems);
-    if (problems.isNotEmpty) {
-      throw BackupValidationException(problems);
+    final resolver = _HueToSwatchResolver();
+
+    final parsedTags = <Tag>[];
+    for (var i = 0; i < tagsRaw.length; i++) {
+      final row = tagsRaw[i];
+      if (row is! Map) {
+        problems.add('tags[$i] 不是对象');
+        continue;
+      }
+      final tag = _parseTagV1(Map<String, Object?>.from(row), i, resolver, problems);
+      if (tag != null) parsedTags.add(tag);
     }
 
-    var importedTasks = 0;
-    var importedTags = 0;
-    var skipped = 0;
-
-    await db.transaction((txn) async {
-      await _ensureFactorySwatches(txn);
-      final migrator = _HueToSwatchMigrator(txn);
-
-      for (var i = 0; i < tagsRaw.length; i++) {
-        final row = tagsRaw[i];
-        if (row is! Map) {
-          problems.add('tags[$i] 不是对象');
-          continue;
-        }
-        final m = Map<String, Object?>.from(row);
-        final id = m['id'];
-        final name = m['name'];
-        final hue = m['hue'];
-        if (id is! String || id.isEmpty) {
-          problems.add('tags[$i]: 缺少 id');
-          continue;
-        }
-        if (name is! String || name.isEmpty) {
-          problems.add('tags[$i]: 缺少 name');
-          continue;
-        }
-        if (hue is! int) {
-          problems.add('tags[$i]: 缺少 hue');
-          continue;
-        }
-        final swatchId = await migrator.resolve(hue);
-        final existing = await txn.query(
-          'tag',
-          where: 'id = ?',
-          whereArgs: [id],
-        );
-        if (existing.isEmpty) {
-          await txn.insert('tag', {
-            'id': id,
-            'name': name,
-            'swatch_id': swatchId,
-          });
-          importedTags++;
-        }
+    final parsedTasks = <Task>[];
+    final taskTagIds = <String, List<String>>{};
+    for (var i = 0; i < tasksRaw.length; i++) {
+      final row = tasksRaw[i];
+      if (row is! Map) {
+        problems.add('tasks[$i] 不是对象');
+        continue;
       }
-
-      for (var i = 0; i < tasksRaw.length; i++) {
-        final row = tasksRaw[i];
-        if (row is! Map) {
-          problems.add('tasks[$i] 不是对象');
-          continue;
-        }
-        final m = Map<String, Object?>.from(row);
-        final task = await _parseTaskV1(m, i, migrator, problems);
-        if (task == null) continue;
-
-        final existing = await txn.query(
-          'task',
-          where: 'id = ?',
-          whereArgs: [task.id],
-        );
-        if (existing.isNotEmpty) {
-          skipped++;
-          continue;
-        }
-        await txn.insert('task', {
-          'id': task.id,
-          'title': task.title,
-          'planned_start': task.plannedStart,
-          'planned_end': task.plannedEnd,
-          'actual_start': task.actualStart,
-          'actual_end': task.actualEnd,
-          'is_done': task.isDone ? 1 : 0,
-          'primary_tag_id': task.primaryTagId,
-          'auto_swatch_id': task.autoSwatchId,
-          'override_swatch_id': task.overrideSwatchId,
-          'notes': task.notes,
-          'created_at': task.createdAt,
-        });
+      final m = Map<String, Object?>.from(row);
+      final task = _parseTaskV1(m, i, resolver, problems);
+      if (task != null) {
+        parsedTasks.add(task);
         final ids = m['tag_ids'];
         if (ids is List) {
-          for (final tagId in ids) {
-            await txn.insert('task_tag', {
-              'task_id': task.id,
-              'tag_id': '$tagId',
-            });
-          }
+          taskTagIds[task.id] = [for (final x in ids) '$x'];
         }
-        importedTasks++;
       }
-
-      final s = parsedSettings!;
-      await _writeSettings(txn, s);
-    });
+    }
 
     if (problems.isNotEmpty) {
       throw BackupValidationException(problems);
     }
 
-    if (tasks is SqliteTaskRepository) {
-      (tasks as SqliteTaskRepository).notifyChanged();
-    }
-    await settings.write(parsedSettings!);
-
-    return BackupImportResult(
-      importedTasks: importedTasks,
-      importedTags: importedTags,
-      skippedDuplicates: skipped,
+    return _writeImport(
+      swatches: resolver.customSwatches,
+      tags: parsedTags,
+      tasks: parsedTasks,
+      taskTagIds: taskTagIds,
+      settings: parsedSettings!,
+      ensureFactorySwatches: true,
     );
   }
 
@@ -335,12 +266,16 @@ class BackupService {
     required List<Task> tasks,
     required Map<String, List<String>> taskTagIds,
     required AppSettings settings,
+    bool ensureFactorySwatches = false,
   }) async {
     var importedTasks = 0;
     var importedTags = 0;
     var skipped = 0;
 
     await db.transaction((txn) async {
+      if (ensureFactorySwatches) {
+        await _ensureFactorySwatches(txn);
+      }
       for (final swatch in swatches) {
         await txn.insert(
           'color_swatch',
@@ -571,12 +506,36 @@ class BackupService {
     );
   }
 
-  Future<Task?> _parseTaskV1(
+  Tag? _parseTagV1(
     Map<String, Object?> m,
     int i,
-    _HueToSwatchMigrator migrator,
+    _HueToSwatchResolver resolver,
     List<String> problems,
-  ) async {
+  ) {
+    final id = m['id'];
+    final name = m['name'];
+    final hue = m['hue'];
+    if (id is! String || id.isEmpty) {
+      problems.add('tags[$i]: 缺少 id');
+      return null;
+    }
+    if (name is! String || name.isEmpty) {
+      problems.add('tags[$i]: 缺少 name');
+      return null;
+    }
+    if (hue is! int) {
+      problems.add('tags[$i]: 缺少 hue');
+      return null;
+    }
+    return Tag(id: id, name: name, swatchId: resolver.resolve(hue));
+  }
+
+  Task? _parseTaskV1(
+    Map<String, Object?> m,
+    int i,
+    _HueToSwatchResolver resolver,
+    List<String> problems,
+  ) {
     final id = m['id'];
     final title = m['title'];
     final start = m['planned_start'];
@@ -603,10 +562,10 @@ class BackupService {
       problems.add('tasks[$i]: auto_hue / created_at 非法');
       return null;
     }
-    final autoSwatchId = await migrator.resolve(autoHue);
+    final autoSwatchId = resolver.resolve(autoHue);
     final overrideHue = m['override_hue'];
     final overrideSwatchId =
-        overrideHue != null ? await migrator.resolve(overrideHue as int) : null;
+        overrideHue != null ? resolver.resolve(overrideHue as int) : null;
     return Task(
       id: id,
       title: title,
@@ -671,19 +630,21 @@ class BackupService {
 
 const _customSwatchName = '自定义色';
 
-class _HueToSwatchMigrator {
-  _HueToSwatchMigrator(this._db) {
+class _HueToSwatchResolver {
+  _HueToSwatchResolver() {
     for (final s in kFactoryColorSwatches) {
       _hueToId[s.hue] = s.id;
     }
   }
 
-  final DatabaseExecutor _db;
   final _uuid = const Uuid();
   final Map<int, String> _hueToId = {};
+  final Map<int, ColorSwatch> _customByHue = {};
   var _nextSortOrder = kFactoryColorSwatches.length;
 
-  Future<String> resolve(int hue) async {
+  List<ColorSwatch> get customSwatches => _customByHue.values.toList();
+
+  String resolve(int hue) {
     final cached = _hueToId[hue];
     if (cached != null) return cached;
 
@@ -699,8 +660,8 @@ class _HueToSwatchMigrator {
       argb: argb,
       sortOrder: _nextSortOrder++,
     );
-    await _db.insert('color_swatch', BackupService._rowFromSwatch(swatch));
     _hueToId[hue] = id;
+    _customByHue[hue] = swatch;
     return id;
   }
 }
