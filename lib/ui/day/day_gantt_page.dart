@@ -69,9 +69,13 @@ import 'day_gantt_painter.dart';
     final shell = useActualShell ? actualSegs.single : plannedSegs.single;
     final lane = rows.length;
     rows.add(task);
-    final baseHue = taskBaseHue(task, tags);
+    final swatchId = resolveTaskSwatchId(task, tags);
+    final base = kFactoryColorSwatches.firstWhere(
+      (s) => s.id == swatchId,
+      orElse: () => kFactoryColorSwatches.firstWhere((s) => s.isDefault),
+    );
     final paint = UrgencyPalette.paint(
-      baseHue: baseHue,
+      base: base,
       plannedStart: task.plannedStart,
       plannedEnd: task.plannedEnd,
       now: now,
