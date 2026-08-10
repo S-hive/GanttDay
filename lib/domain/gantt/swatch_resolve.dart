@@ -12,19 +12,6 @@ String swatchIdForHue(int hue) {
   return kDefaultSwatchId;
 }
 
-/// Resolves a swatch id to its hue for legacy UI / DB bridges.
-int hueForSwatchId(String swatchId) {
-  for (final s in kFactoryColorSwatches) {
-    if (s.id == swatchId) return s.hue;
-  }
-  return kFactoryColorSwatches.firstWhere((s) => s.isDefault).hue;
-}
-
-/// Base paint hue after override → tag → auto resolution.
-int taskBaseHue(Task task, Map<String, Tag> tagsById) {
-  return hueForSwatchId(resolveTaskSwatchId(task, tagsById));
-}
-
 ColorSwatch colorSwatchFromArgb({
   required String id,
   required String name,

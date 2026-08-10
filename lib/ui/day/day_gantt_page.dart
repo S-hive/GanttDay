@@ -2,13 +2,14 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide ColorSwatch;
 import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
 import '../../domain/gantt/factory_swatches.dart';
 import '../../domain/gantt/swatch_resolve.dart';
+import '../../domain/models/color_swatch.dart';
 import '../../domain/gantt/day_segmenter.dart';
 import '../../domain/gantt/day_span_clamp.dart';
 import '../../domain/gantt/day_visible_range.dart';
@@ -28,11 +29,14 @@ import 'day_gantt_painter.dart';
 ({List<PlacedBar> bars, List<Task> rows}) buildTableRows({
   required List<Task> tasks,
   required Map<String, Tag> tags,
+  required Map<String, ColorSwatch> swatchesById,
   required GanttGeometry geo,
   required WallMinutes dayAny,
   required WallMinutes now,
   required int urgencyWindowDays,
 }) {
+  final defaultSwatch =
+      swatchesById[kDefaultSwatchId] ?? kFactoryColorSwatches.firstWhere((s) => s.isDefault);
   final sorted = [...tasks]..sort((a, b) {
       final c = a.plannedStart.compareTo(b.plannedStart);
       return c != 0 ? c : a.title.compareTo(b.title);
@@ -70,10 +74,7 @@ import 'day_gantt_painter.dart';
     final lane = rows.length;
     rows.add(task);
     final swatchId = resolveTaskSwatchId(task, tags);
-    final base = kFactoryColorSwatches.firstWhere(
-      (s) => s.id == swatchId,
-      orElse: () => kFactoryColorSwatches.firstWhere((s) => s.isDefault),
-    );
+    final base = swatchesById[swatchId] ?? defaultSwatch;
     final paint = UrgencyPalette.paint(
       base: base,
       plannedStart: task.plannedStart,
@@ -126,6 +127,7 @@ import 'day_gantt_painter.dart';
 List<PlacedBar> buildPlacedBars({
   required List<Task> tasks,
   required Map<String, Tag> tags,
+  required Map<String, ColorSwatch> swatchesById,
   required GanttGeometry geo,
   required WallMinutes dayAny,
   required WallMinutes now,
@@ -134,6 +136,7 @@ List<PlacedBar> buildPlacedBars({
   return buildTableRows(
     tasks: tasks,
     tags: tags,
+    swatchesById: swatchesById,
     geo: geo,
     dayAny: dayAny,
     now: now,
@@ -184,6 +187,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
 
   List<Task> _tasks = const [];
   Map<String, Tag> _tags = const {};
+  Map<String, ColorSwatch> _swatchesById = const {};
   Map<String, List<String>> _taskTagIds = const {};
   AppSettings _settings = const AppSettings();
 
@@ -381,6 +385,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
         .watchTasksOverlapping(_day0, _day0 + kDayViewMaxSpanMinutes)
         .listen((tasks) async {
       final tags = await widget.services.tasks.listTags();
+      final swatches = await widget.services.tasks.listSwatches();
       final tagIds = <String, List<String>>{};
       for (final t in tasks) {
         tagIds[t.id] = await widget.services.tasks.tagIdsForTask(t.id);
@@ -389,6 +394,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
       setState(() {
         _tasks = tasks;
         _tags = {for (final t in tags) t.id: t};
+        _swatchesById = {for (final s in swatches) s.id: s};
         _taskTagIds = tagIds;
       });
     });
@@ -473,12 +479,13 @@ class _DayGanttPageState extends State<DayGanttPage> {
     }
     if (title == null || title.trim().isEmpty) return;
     final clamped = clampSpanToAxis(start: start, end: end, dayAny: _day0);
+    final defaultSwatch = await widget.services.tasks.defaultSwatch();
     final task = Task(
       id: const Uuid().v4(),
       title: title.trim(),
       plannedStart: clamped.start,
       plannedEnd: clamped.end,
-      autoSwatchId: kDefaultSwatchId,
+      autoSwatchId: defaultSwatch.id,
       createdAt: WallClock.now(),
     );
     try {
@@ -514,6 +521,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
       final table = buildTableRows(
         tasks: visibleTasks,
         tags: _tags,
+        swatchesById: _swatchesById,
         geo: geo,
         dayAny: _day0,
         now: now,

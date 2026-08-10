@@ -1,7 +1,7 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide ColorSwatch;
 
 import '../../app.dart';
-import '../../domain/gantt/swatch_resolve.dart';
+import '../../domain/models/color_swatch.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
@@ -25,6 +25,20 @@ class _AppShellState extends State<AppShell> {
   int _navIndex = 0; // 0 day, 1 week, 2 month
   Set<String> _filterTagIds = {};
   List<Tag> _tags = const [];
+  Map<String, ColorSwatch> _swatchesById = const {};
+
+  ColorSwatch? get _defaultSwatch {
+    for (final s in _swatchesById.values) {
+      if (s.isDefault) return s;
+    }
+    return _swatchesById.isEmpty ? null : _swatchesById.values.first;
+  }
+
+  Color _tagColor(String swatchId) {
+    final swatch = _swatchesById[swatchId] ?? _defaultSwatch;
+    if (swatch == null) return Colors.grey;
+    return Color(swatch.argb);
+  }
 
   @override
   void initState() {
@@ -34,7 +48,13 @@ class _AppShellState extends State<AppShell> {
 
   Future<void> _reloadTags() async {
     final tags = await widget.services.tasks.listTags();
-    if (mounted) setState(() => _tags = tags);
+    final swatches = await widget.services.tasks.listSwatches();
+    if (mounted) {
+      setState(() {
+        _tags = tags;
+        _swatchesById = {for (final s in swatches) s.id: s};
+      });
+    }
   }
 
   void _shift(int delta) {
@@ -148,12 +168,7 @@ class _AppShellState extends State<AppShell> {
                         label: Text(tag.name),
                         selected: _filterTagIds.contains(tag.id),
                         avatar: CircleAvatar(
-                          backgroundColor: HSLColor.fromAHSL(
-                                  1,
-                                  hueForSwatchId(tag.swatchId).toDouble(),
-                                  0.7,
-                                  0.55)
-                              .toColor(),
+                          backgroundColor: _tagColor(tag.swatchId),
                           radius: 8,
                         ),
                         onSelected: (sel) => setState(() {

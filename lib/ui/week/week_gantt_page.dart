@@ -1,12 +1,13 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide ColorSwatch;
 
 import '../../app.dart';
-import '../../domain/gantt/color_palette.dart';
+import '../../domain/gantt/factory_swatches.dart';
 import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/gantt/urgency_palette.dart';
 import '../../domain/models/app_settings.dart';
+import '../../domain/models/color_swatch.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
@@ -65,6 +66,7 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
 
   List<Task> _tasks = const [];
   Map<String, Tag> _tags = const {};
+  Map<String, ColorSwatch> _swatchesById = const {};
   AppSettings _settings = const AppSettings();
 
   DateTime get _weekStart {
@@ -101,10 +103,12 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
         .watchTasksOverlapping(_rangeStart, _rangeEnd)
         .listen((tasks) async {
       final tags = await widget.services.tasks.listTags();
+      final swatches = await widget.services.tasks.listSwatches();
       if (!mounted) return;
       setState(() {
         _tasks = tasks;
         _tags = {for (final t in tags) t.id: t};
+        _swatchesById = {for (final s in swatches) s.id: s};
       });
     });
   }
@@ -126,24 +130,28 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
         .toList();
   }
 
-  /// Same as month: base palette color; overdue unfinished → gray.
+  ColorSwatch get _defaultSwatch =>
+      _swatchesById[kDefaultSwatchId] ??
+      kFactoryColorSwatches.firstWhere((s) => s.isDefault);
+
+  /// Same as month: base swatch color; overdue unfinished → gray.
   BarPaint _paintFor(Task task) {
-    final hue = taskBaseHue(task, _tags);
+    final id = resolveTaskSwatchId(task, _tags);
+    final base = _swatchesById[id] ?? _defaultSwatch;
     final overdue = !task.isDone && task.plannedEnd < WallClock.now();
     if (overdue) {
       return BarPaint(
-        hue: hue,
+        hue: base.hue,
         saturation: 0.12,
         lightness: 0.55,
         hatchOverdue: false,
         isPlannedGray: true,
       );
     }
-    final swatch = swatchForHue(hue);
     return BarPaint(
-      hue: hue,
-      saturation: swatch?.saturation ?? UrgencyPalette.minSaturation,
-      lightness: swatch?.lightness ?? UrgencyPalette.calmLightness,
+      hue: base.hue,
+      saturation: base.saturation,
+      lightness: base.lightness,
       hatchOverdue: false,
       isPlannedGray: false,
     );
@@ -422,11 +430,9 @@ class _DayColumn extends StatelessWidget {
             color: Colors.transparent,
             child: InkWell(
               onTap: onTap,
-              borderRadius: BorderRadius.circular(6),
               child: Ink(
                 decoration: BoxDecoration(
                   color: bg,
-                  borderRadius: BorderRadius.circular(6),
                 ),
                 child: label,
               ),

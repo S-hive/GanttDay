@@ -1,11 +1,12 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide ColorSwatch;
 
 import '../../app.dart';
-import '../../domain/gantt/color_palette.dart';
+import '../../domain/gantt/factory_swatches.dart';
 import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/gantt/urgency_palette.dart';
+import '../../domain/models/color_swatch.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
@@ -39,6 +40,7 @@ class _MonthPageState extends State<MonthPage> {
   StreamSubscription<List<Task>>? _tasksSub;
   List<Task> _tasks = const [];
   Map<String, Tag> _tags = const {};
+  Map<String, ColorSwatch> _swatchesById = const {};
 
   DateTime get _monthStart =>
       DateTime(widget.month.year, widget.month.month, 1);
@@ -66,10 +68,12 @@ class _MonthPageState extends State<MonthPage> {
         .watchTasksOverlapping(start, end)
         .listen((tasks) async {
       final tags = await widget.services.tasks.listTags();
+      final swatches = await widget.services.tasks.listSwatches();
       if (!mounted) return;
       setState(() {
         _tasks = tasks;
         _tags = {for (final t in tags) t.id: t};
+        _swatchesById = {for (final s in swatches) s.id: s};
       });
     });
   }
@@ -80,25 +84,29 @@ class _MonthPageState extends State<MonthPage> {
     super.dispose();
   }
 
-  /// Month bars keep the task's base palette color. Done / unfinished look the
+  ColorSwatch get _defaultSwatch =>
+      _swatchesById[kDefaultSwatchId] ??
+      kFactoryColorSwatches.firstWhere((s) => s.isDefault);
+
+  /// Month bars keep the task's base swatch color. Done / unfinished look the
   /// same; overdue unfinished tasks are gray.
   BarPaint _paintFor(Task task) {
-    final hue = taskBaseHue(task, _tags);
+    final id = resolveTaskSwatchId(task, _tags);
+    final base = _swatchesById[id] ?? _defaultSwatch;
     final overdue = !task.isDone && task.plannedEnd < WallClock.now();
     if (overdue) {
       return BarPaint(
-        hue: hue,
+        hue: base.hue,
         saturation: 0.12,
         lightness: 0.55,
         hatchOverdue: false,
         isPlannedGray: true,
       );
     }
-    final swatch = swatchForHue(hue);
     return BarPaint(
-      hue: hue,
-      saturation: swatch?.saturation ?? UrgencyPalette.minSaturation,
-      lightness: swatch?.lightness ?? UrgencyPalette.calmLightness,
+      hue: base.hue,
+      saturation: base.saturation,
+      lightness: base.lightness,
       hatchOverdue: false,
       isPlannedGray: false,
     );
@@ -277,12 +285,10 @@ class _WeekRow extends StatelessWidget {
                           child: Material(
                             color: Colors.transparent,
                             child: InkWell(
-                              borderRadius: BorderRadius.circular(5),
                               onTap: () => onOpenDay(bar.openDay),
                               child: Ink(
                                 decoration: BoxDecoration(
                                   color: bg,
-                                  borderRadius: BorderRadius.circular(5),
                                 ),
                                 child: label,
                               ),

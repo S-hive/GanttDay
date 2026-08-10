@@ -1,9 +1,9 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide ColorSwatch;
 import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
-import '../../domain/gantt/factory_swatches.dart';
 import '../../domain/gantt/swatch_resolve.dart';
+import '../../domain/models/color_swatch.dart';
 import '../../domain/gantt/gantt_geometry.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
@@ -40,6 +40,7 @@ class _TaskFormPageState extends State<TaskFormPage> {
   String? _primaryTagId;
   String? _overrideSwatchId;
   List<Tag> _tags = const [];
+  List<ColorSwatch> _swatches = const [];
   List<String> _tagIds = const [];
   String? _error;
   bool _saving = false;
@@ -72,8 +73,25 @@ class _TaskFormPageState extends State<TaskFormPage> {
     _loadTags();
   }
 
+  Map<String, ColorSwatch> get _swatchesById =>
+      {for (final s in _swatches) s.id: s};
+
+  ColorSwatch? get _defaultSwatch {
+    for (final s in _swatches) {
+      if (s.isDefault) return s;
+    }
+    return _swatches.isEmpty ? null : _swatches.first;
+  }
+
+  Color _tagColor(String swatchId) {
+    final swatch = _swatchesById[swatchId] ?? _defaultSwatch;
+    if (swatch == null) return Colors.grey;
+    return Color(swatch.argb);
+  }
+
   Future<void> _loadTags() async {
     final tags = await widget.services.tasks.listTags();
+    final swatches = await widget.services.tasks.listSwatches();
     List<String> assigned = const [];
     if (widget.existing != null) {
       assigned =
@@ -82,6 +100,7 @@ class _TaskFormPageState extends State<TaskFormPage> {
     if (!mounted) return;
     setState(() {
       _tags = tags;
+      _swatches = swatches;
       _tagIds = assigned;
     });
   }
@@ -169,13 +188,14 @@ class _TaskFormPageState extends State<TaskFormPage> {
           clearNotes: _notes.text.trim().isEmpty,
         );
       } else {
+        final defaultSwatch = await widget.services.tasks.defaultSwatch();
         task = Task(
           id: const Uuid().v4(),
           title: title,
           plannedStart: start,
           plannedEnd: end,
           primaryTagId: _primaryTagId,
-          autoSwatchId: kDefaultSwatchId,
+          autoSwatchId: defaultSwatch.id,
           overrideSwatchId: _overrideSwatchId,
           notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
           createdAt: WallClock.now(),
@@ -312,12 +332,7 @@ class _TaskFormPageState extends State<TaskFormPage> {
                   label: Text(tag.name),
                   selected: _primaryTagId == tag.id,
                   avatar: CircleAvatar(
-                    backgroundColor: HSLColor.fromAHSL(
-                            1,
-                            hueForSwatchId(tag.swatchId).toDouble(),
-                            0.7,
-                            0.55)
-                        .toColor(),
+                    backgroundColor: _tagColor(tag.swatchId),
                     radius: 8,
                   ),
                   onSelected: (_) => setState(() {
@@ -357,16 +372,17 @@ class _TaskFormPageState extends State<TaskFormPage> {
           const SizedBox(height: 16),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('手动覆盖色相'),
+            title: const Text('手动覆盖颜色'),
             value: _overrideSwatchId != null,
             onChanged: (on) => setState(() {
               _overrideSwatchId = on
                   ? (_overrideSwatchId ??
                       farthestSwatchId(
-                        kFactoryColorSwatches,
+                        _swatches,
                         [
                           for (final t in _tags)
-                            hueForSwatchId(t.swatchId),
+                            if (_swatchesById[t.swatchId] case final swatch?)
+                              swatch.hue,
                         ],
                       ))
                   : null;
@@ -374,7 +390,7 @@ class _TaskFormPageState extends State<TaskFormPage> {
           ),
           if (_overrideSwatchId != null)
             SwatchPicker(
-              swatches: kFactoryColorSwatches,
+              swatches: _swatches,
               swatchId: _overrideSwatchId!,
               onChanged: (id) => setState(() => _overrideSwatchId = id),
             ),

@@ -1,3 +1,4 @@
+import 'package:ganttday/domain/gantt/factory_swatches.dart';
 import 'package:ganttday/domain/gantt/day_gesture_math.dart';
 import 'package:ganttday/domain/gantt/day_visible_range.dart';
 import 'package:ganttday/domain/gantt/gantt_geometry.dart';
@@ -18,7 +19,7 @@ void main() {
         title: 'work',
         plannedStart: day + startHour * 60,
         plannedEnd: day + startHour * 60 + durationMinutes,
-        autoHue: 100,
+        autoSwatchId: kDefaultSwatchId,
         createdAt: 0,
       );
 
