@@ -169,6 +169,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
   static const double _maxZoom = 4.0;
 
   StreamSubscription<List<Task>>? _tasksSub;
+  StreamSubscription<List<ColorSwatch>>? _swatchesSub;
   StreamSubscription<AppSettings>? _settingsSub;
   Timer? _nowTimer;
   final ScrollController _hScroll = ScrollController();
@@ -215,6 +216,12 @@ class _DayGanttPageState extends State<DayGanttPage> {
   void initState() {
     super.initState();
     _subscribe();
+    _swatchesSub = widget.services.tasks.watchSwatches().listen((swatches) {
+      if (!mounted) return;
+      setState(() {
+        _swatchesById = {for (final s in swatches) s.id: s};
+      });
+    });
     _settingsSub = widget.services.settings.watch().listen((s) {
       if (!mounted) return;
       final hoursChanged = s.visibleStartHour != _settings.visibleStartHour ||
@@ -385,7 +392,6 @@ class _DayGanttPageState extends State<DayGanttPage> {
         .watchTasksOverlapping(_day0, _day0 + kDayViewMaxSpanMinutes)
         .listen((tasks) async {
       final tags = await widget.services.tasks.listTags();
-      final swatches = await widget.services.tasks.listSwatches();
       final tagIds = <String, List<String>>{};
       for (final t in tasks) {
         tagIds[t.id] = await widget.services.tasks.tagIdsForTask(t.id);
@@ -394,7 +400,6 @@ class _DayGanttPageState extends State<DayGanttPage> {
       setState(() {
         _tasks = tasks;
         _tags = {for (final t in tags) t.id: t};
-        _swatchesById = {for (final s in swatches) s.id: s};
         _taskTagIds = tagIds;
       });
     });
@@ -403,6 +408,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
   @override
   void dispose() {
     _tasksSub?.cancel();
+    _swatchesSub?.cancel();
     _settingsSub?.cancel();
     _nowTimer?.cancel();
     _hScroll.dispose();

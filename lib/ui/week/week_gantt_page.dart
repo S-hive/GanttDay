@@ -60,6 +60,7 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   }
 
   StreamSubscription<List<Task>>? _tasksSub;
+  StreamSubscription<List<ColorSwatch>>? _swatchesSub;
   StreamSubscription<AppSettings>? _settingsSub;
   final ScrollController _vScroll = ScrollController();
   bool _didInitialScroll = false;
@@ -82,6 +83,12 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   void initState() {
     super.initState();
     _subscribe();
+    _swatchesSub = widget.services.tasks.watchSwatches().listen((swatches) {
+      if (!mounted) return;
+      setState(() {
+        _swatchesById = {for (final s in swatches) s.id: s};
+      });
+    });
     _settingsSub = widget.services.settings.watch().listen((s) {
       if (mounted) setState(() => _settings = s);
     });
@@ -103,12 +110,10 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
         .watchTasksOverlapping(_rangeStart, _rangeEnd)
         .listen((tasks) async {
       final tags = await widget.services.tasks.listTags();
-      final swatches = await widget.services.tasks.listSwatches();
       if (!mounted) return;
       setState(() {
         _tasks = tasks;
         _tags = {for (final t in tags) t.id: t};
-        _swatchesById = {for (final s in swatches) s.id: s};
       });
     });
   }
@@ -116,6 +121,7 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   @override
   void dispose() {
     _tasksSub?.cancel();
+    _swatchesSub?.cancel();
     _settingsSub?.cancel();
     _vScroll.dispose();
     super.dispose();

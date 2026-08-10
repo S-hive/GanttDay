@@ -38,6 +38,7 @@ class _MonthPageState extends State<MonthPage> {
   static const double _minBarWidth = 4;
 
   StreamSubscription<List<Task>>? _tasksSub;
+  StreamSubscription<List<ColorSwatch>>? _swatchesSub;
   List<Task> _tasks = const [];
   Map<String, Tag> _tags = const {};
   Map<String, ColorSwatch> _swatchesById = const {};
@@ -52,6 +53,12 @@ class _MonthPageState extends State<MonthPage> {
   void initState() {
     super.initState();
     _subscribe();
+    _swatchesSub = widget.services.tasks.watchSwatches().listen((swatches) {
+      if (!mounted) return;
+      setState(() {
+        _swatchesById = {for (final s in swatches) s.id: s};
+      });
+    });
   }
 
   @override
@@ -68,12 +75,10 @@ class _MonthPageState extends State<MonthPage> {
         .watchTasksOverlapping(start, end)
         .listen((tasks) async {
       final tags = await widget.services.tasks.listTags();
-      final swatches = await widget.services.tasks.listSwatches();
       if (!mounted) return;
       setState(() {
         _tasks = tasks;
         _tags = {for (final t in tags) t.id: t};
-        _swatchesById = {for (final s in swatches) s.id: s};
       });
     });
   }
@@ -81,6 +86,7 @@ class _MonthPageState extends State<MonthPage> {
   @override
   void dispose() {
     _tasksSub?.cancel();
+    _swatchesSub?.cancel();
     super.dispose();
   }
 
