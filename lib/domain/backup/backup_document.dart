@@ -1,3 +1,4 @@
+import '../../domain/gantt/swatch_resolve.dart';
 import '../models/app_settings.dart';
 import '../models/tag.dart';
 import '../models/task.dart';
@@ -23,7 +24,12 @@ class BackupDocument {
         'exportedAt': exportedAt,
         'tasks': [for (final t in tasks) _taskToJson(t)],
         'tags': [
-          for (final t in tags) {'id': t.id, 'name': t.name, 'hue': t.hue}
+          for (final t in tags)
+            {
+              'id': t.id,
+              'name': t.name,
+              'hue': hueForSwatchId(t.swatchId),
+            }
         ],
         'settings': {
           'visible_start_hour': settings.visibleStartHour,
@@ -41,8 +47,10 @@ class BackupDocument {
         'actual_end': t.actualEnd,
         'is_done': t.isDone,
         'primary_tag_id': t.primaryTagId,
-        'auto_hue': t.autoHue,
-        'override_hue': t.overrideHue,
+        'auto_hue': hueForSwatchId(t.autoSwatchId),
+        'override_hue': t.overrideSwatchId != null
+            ? hueForSwatchId(t.overrideSwatchId!)
+            : null,
         'notes': t.notes,
         'created_at': t.createdAt,
       };
@@ -74,7 +82,7 @@ class BackupDocument {
           Tag(
             id: (r as Map)['id'] as String,
             name: r['name'] as String,
-            hue: r['hue'] as int,
+            swatchId: swatchIdForHue(r['hue'] as int),
           )
       ],
       settings: AppSettings(
@@ -95,8 +103,10 @@ class BackupDocument {
       actualEnd: r['actual_end'] as int?,
       isDone: r['is_done'] == true || r['is_done'] == 1,
       primaryTagId: r['primary_tag_id'] as String?,
-      autoHue: r['auto_hue'] as int,
-      overrideHue: r['override_hue'] as int?,
+      autoSwatchId: swatchIdForHue(r['auto_hue'] as int),
+      overrideSwatchId: r['override_hue'] != null
+          ? swatchIdForHue(r['override_hue'] as int)
+          : null,
       notes: r['notes'] as String?,
       createdAt: r['created_at'] as int,
     );

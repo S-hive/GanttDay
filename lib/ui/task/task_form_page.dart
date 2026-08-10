@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
-import '../../domain/gantt/auto_hue.dart';
-import '../../domain/gantt/color_palette.dart';
+import '../../domain/gantt/factory_swatches.dart';
+import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/gantt/gantt_geometry.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
@@ -38,7 +38,7 @@ class _TaskFormPageState extends State<TaskFormPage> {
   late DateTime _start;
   late DateTime _end;
   String? _primaryTagId;
-  int? _overrideHue;
+  String? _overrideSwatchId;
   List<Tag> _tags = const [];
   List<String> _tagIds = const [];
   String? _error;
@@ -56,7 +56,7 @@ class _TaskFormPageState extends State<TaskFormPage> {
       _start = WallClock.dateTime(existing.plannedStart);
       _end = WallClock.dateTime(existing.plannedEnd);
       _primaryTagId = existing.primaryTagId;
-      _overrideHue = existing.overrideHue;
+      _overrideSwatchId = existing.overrideSwatchId;
     } else {
       _title = TextEditingController();
       _notes = TextEditingController();
@@ -162,22 +162,21 @@ class _TaskFormPageState extends State<TaskFormPage> {
           plannedStart: start,
           plannedEnd: end,
           primaryTagId: _primaryTagId,
-          overrideHue: _overrideHue,
+          overrideSwatchId: _overrideSwatchId,
           notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
           clearPrimaryTag: _primaryTagId == null,
-          clearOverrideHue: _overrideHue == null,
+          clearOverrideSwatch: _overrideSwatchId == null,
           clearNotes: _notes.text.trim().isEmpty,
         );
       } else {
-        final hues = [for (final t in _tags) t.hue];
         task = Task(
           id: const Uuid().v4(),
           title: title,
           plannedStart: start,
           plannedEnd: end,
           primaryTagId: _primaryTagId,
-          autoHue: pickAutoHue(hues),
-          overrideHue: _overrideHue,
+          autoSwatchId: kDefaultSwatchId,
+          overrideSwatchId: _overrideSwatchId,
           notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
           createdAt: WallClock.now(),
         );
@@ -314,7 +313,10 @@ class _TaskFormPageState extends State<TaskFormPage> {
                   selected: _primaryTagId == tag.id,
                   avatar: CircleAvatar(
                     backgroundColor: HSLColor.fromAHSL(
-                            1, tag.hue.toDouble(), 0.7, 0.55)
+                            1,
+                            hueForSwatchId(tag.swatchId).toDouble(),
+                            0.7,
+                            0.55)
                         .toColor(),
                     radius: 8,
                   ),
@@ -356,18 +358,25 @@ class _TaskFormPageState extends State<TaskFormPage> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('手动覆盖色相'),
-            value: _overrideHue != null,
+            value: _overrideSwatchId != null,
             onChanged: (on) => setState(() {
-              _overrideHue = on
-                  ? (_overrideHue ??
-                      farthestPaletteHue([for (final t in _tags) t.hue]))
+              _overrideSwatchId = on
+                  ? (_overrideSwatchId ??
+                      farthestSwatchId(
+                        kFactoryColorSwatches,
+                        [
+                          for (final t in _tags)
+                            hueForSwatchId(t.swatchId),
+                        ],
+                      ))
                   : null;
             }),
           ),
-          if (_overrideHue != null)
+          if (_overrideSwatchId != null)
             HuePicker(
-              hue: _overrideHue!,
-              onChanged: (v) => setState(() => _overrideHue = v),
+              hue: hueForSwatchId(_overrideSwatchId!),
+              onChanged: (v) =>
+                  setState(() => _overrideSwatchId = swatchIdForHue(v)),
             ),
           if (_error != null) ...[
             const SizedBox(height: 8),

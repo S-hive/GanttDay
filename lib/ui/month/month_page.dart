@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app.dart';
 import '../../domain/gantt/color_palette.dart';
+import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/gantt/urgency_palette.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
@@ -82,8 +83,7 @@ class _MonthPageState extends State<MonthPage> {
   /// Month bars keep the task's base palette color. Done / unfinished look the
   /// same; overdue unfinished tasks are gray.
   BarPaint _paintFor(Task task) {
-    final hue =
-        task.overrideHue ?? _tags[task.primaryTagId]?.hue ?? task.autoHue;
+    final hue = taskBaseHue(task, _tags);
     final overdue = !task.isDone && task.plannedEnd < WallClock.now();
     if (overdue) {
       return BarPaint(

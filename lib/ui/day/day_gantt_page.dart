@@ -7,7 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
-import '../../domain/gantt/auto_hue.dart';
+import '../../domain/gantt/factory_swatches.dart';
+import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/gantt/day_segmenter.dart';
 import '../../domain/gantt/day_span_clamp.dart';
 import '../../domain/gantt/day_visible_range.dart';
@@ -68,8 +69,7 @@ import 'day_gantt_painter.dart';
     final shell = useActualShell ? actualSegs.single : plannedSegs.single;
     final lane = rows.length;
     rows.add(task);
-    final baseHue =
-        task.overrideHue ?? tags[task.primaryTagId]?.hue ?? task.autoHue;
+    final baseHue = taskBaseHue(task, tags);
     final paint = UrgencyPalette.paint(
       baseHue: baseHue,
       plannedStart: task.plannedStart,
@@ -469,13 +469,12 @@ class _DayGanttPageState extends State<DayGanttPage> {
     }
     if (title == null || title.trim().isEmpty) return;
     final clamped = clampSpanToAxis(start: start, end: end, dayAny: _day0);
-    final tags = await widget.services.tasks.listTags();
     final task = Task(
       id: const Uuid().v4(),
       title: title.trim(),
       plannedStart: clamped.start,
       plannedEnd: clamped.end,
-      autoHue: pickAutoHue([for (final t in tags) t.hue]),
+      autoSwatchId: kDefaultSwatchId,
       createdAt: WallClock.now(),
     );
     try {

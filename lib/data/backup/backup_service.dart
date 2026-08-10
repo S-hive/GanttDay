@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:sqflite_common/sqlite_api.dart';
 
+import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/models/app_settings.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
@@ -56,8 +57,10 @@ class BackupService {
         'actual_end': t.actualEnd,
         'is_done': t.isDone,
         'primary_tag_id': t.primaryTagId,
-        'auto_hue': t.autoHue,
-        'override_hue': t.overrideHue,
+        'auto_hue': hueForSwatchId(t.autoSwatchId),
+        'override_hue': t.overrideSwatchId != null
+            ? hueForSwatchId(t.overrideSwatchId!)
+            : null,
         'notes': t.notes,
         'created_at': t.createdAt,
         'tag_ids': tagIds,
@@ -69,7 +72,12 @@ class BackupService {
       'exportedAt': WallClock.now(),
       'tasks': tasksJson,
       'tags': [
-        for (final t in tags) {'id': t.id, 'name': t.name, 'hue': t.hue}
+        for (final t in tags)
+          {
+            'id': t.id,
+            'name': t.name,
+            'hue': hueForSwatchId(t.swatchId),
+          }
       ],
       'settings': {
         'visible_start_hour': appSettings.visibleStartHour,
@@ -145,7 +153,9 @@ class BackupService {
           problems.add('tags[$i]: 缺少 hue');
           continue;
         }
-        parsedTags.add(Tag(id: id, name: name, hue: hue));
+        parsedTags.add(
+          Tag(id: id, name: name, swatchId: swatchIdForHue(hue)),
+        );
       }
     }
 
@@ -187,7 +197,7 @@ class BackupService {
           await txn.insert('tag', {
             'id': tag.id,
             'name': tag.name,
-            'hue': tag.hue,
+            'hue': hueForSwatchId(tag.swatchId),
           });
           importedTags++;
         }
@@ -212,8 +222,10 @@ class BackupService {
           'actual_end': task.actualEnd,
           'is_done': task.isDone ? 1 : 0,
           'primary_tag_id': task.primaryTagId,
-          'auto_hue': task.autoHue,
-          'override_hue': task.overrideHue,
+          'auto_hue': hueForSwatchId(task.autoSwatchId),
+          'override_hue': task.overrideSwatchId != null
+              ? hueForSwatchId(task.overrideSwatchId!)
+              : null,
           'notes': task.notes,
           'created_at': task.createdAt,
         });
@@ -285,8 +297,10 @@ class BackupService {
       actualEnd: m['actual_end'] as int?,
       isDone: m['is_done'] == true || m['is_done'] == 1,
       primaryTagId: m['primary_tag_id'] as String?,
-      autoHue: autoHue,
-      overrideHue: m['override_hue'] as int?,
+      autoSwatchId: swatchIdForHue(autoHue),
+      overrideSwatchId: m['override_hue'] != null
+          ? swatchIdForHue(m['override_hue'] as int)
+          : null,
       notes: m['notes'] as String?,
       createdAt: createdAt,
     );

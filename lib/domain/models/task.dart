@@ -10,8 +10,8 @@ class Task {
     this.actualEnd,
     this.isDone = false,
     this.primaryTagId,
-    required this.autoHue,
-    this.overrideHue,
+    required this.autoSwatchId,
+    this.overrideSwatchId,
     this.notes,
     required this.createdAt,
   });
@@ -24,8 +24,8 @@ class Task {
   final WallMinutes? actualEnd;
   final bool isDone;
   final String? primaryTagId;
-  final int autoHue;
-  final int? overrideHue;
+  final String autoSwatchId;
+  final String? overrideSwatchId;
   final String? notes;
   final WallMinutes createdAt;
 
@@ -37,11 +37,11 @@ class Task {
     WallMinutes? actualEnd,
     bool? isDone,
     String? primaryTagId,
-    int? overrideHue,
+    String? overrideSwatchId,
     String? notes,
     bool clearActuals = false,
     bool clearPrimaryTag = false,
-    bool clearOverrideHue = false,
+    bool clearOverrideSwatch = false,
     bool clearNotes = false,
   }) {
     return Task(
@@ -54,8 +54,10 @@ class Task {
       isDone: isDone ?? this.isDone,
       primaryTagId:
           clearPrimaryTag ? null : (primaryTagId ?? this.primaryTagId),
-      autoHue: autoHue,
-      overrideHue: clearOverrideHue ? null : (overrideHue ?? this.overrideHue),
+      autoSwatchId: autoSwatchId,
+      overrideSwatchId: clearOverrideSwatch
+          ? null
+          : (overrideSwatchId ?? this.overrideSwatchId),
       notes: clearNotes ? null : (notes ?? this.notes),
       createdAt: createdAt,
     );

@@ -4,6 +4,8 @@ import 'package:uuid/uuid.dart';
 import '../../app.dart';
 import '../../data/backup/backup_service.dart';
 import '../../domain/gantt/color_palette.dart';
+import '../../domain/gantt/factory_swatches.dart';
+import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/models/app_settings.dart';
 import '../../domain/models/tag.dart';
 import '../common/hue_picker.dart';
@@ -64,7 +66,11 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _addTag() async {
     final nameCtrl = TextEditingController();
-    var hue = farthestPaletteHue([for (final t in _tags) t.hue]);
+    var swatchId = farthestSwatchId(
+      kFactoryColorSwatches,
+      [for (final t in _tags) hueForSwatchId(t.swatchId)],
+    );
+    var hue = hueForSwatchId(swatchId);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -81,7 +87,10 @@ class _SettingsPageState extends State<SettingsPage> {
               const SizedBox(height: 12),
               HuePicker(
                 hue: hue,
-                onChanged: (v) => setLocal(() => hue = v),
+                onChanged: (v) => setLocal(() {
+                  hue = v;
+                  swatchId = swatchIdForHue(v);
+                }),
               ),
             ],
           ),
@@ -100,7 +109,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final name = nameCtrl.text.trim();
     if (name.isEmpty) return;
     await widget.services.tasks.upsertTag(
-      Tag(id: const Uuid().v4(), name: name, hue: hue),
+      Tag(id: const Uuid().v4(), name: name, swatchId: swatchId),
     );
     await _reload();
   }
@@ -269,7 +278,7 @@ class _SettingsPageState extends State<SettingsPage> {
           for (final tag in _tags)
             ListTile(
               leading: CircleAvatar(
-                backgroundColor: _previewHue(tag.hue),
+                backgroundColor: _previewHue(hueForSwatchId(tag.swatchId)),
               ),
               title: Text(tag.name),
               trailing: IconButton(

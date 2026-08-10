@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app.dart';
 import '../../domain/gantt/color_palette.dart';
+import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/gantt/urgency_palette.dart';
 import '../../domain/models/app_settings.dart';
 import '../../domain/models/tag.dart';
@@ -127,8 +128,7 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
 
   /// Same as month: base palette color; overdue unfinished → gray.
   BarPaint _paintFor(Task task) {
-    final hue =
-        task.overrideHue ?? _tags[task.primaryTagId]?.hue ?? task.autoHue;
+    final hue = taskBaseHue(task, _tags);
     final overdue = !task.isDone && task.plannedEnd < WallClock.now();
     if (overdue) {
       return BarPaint(

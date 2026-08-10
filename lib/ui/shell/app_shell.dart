@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app.dart';
+import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
@@ -148,7 +149,10 @@ class _AppShellState extends State<AppShell> {
                         selected: _filterTagIds.contains(tag.id),
                         avatar: CircleAvatar(
                           backgroundColor: HSLColor.fromAHSL(
-                                  1, tag.hue.toDouble(), 0.7, 0.55)
+                                  1,
+                                  hueForSwatchId(tag.swatchId).toDouble(),
+                                  0.7,
+                                  0.55)
                               .toColor(),
                           radius: 8,
                         ),

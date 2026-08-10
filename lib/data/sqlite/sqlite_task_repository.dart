@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:sqflite_common/sqlite_api.dart';
 
+import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
@@ -114,7 +115,7 @@ class SqliteTaskRepository implements TaskRepository {
         .map((r) => Tag(
               id: r['id'] as String,
               name: r['name'] as String,
-              hue: r['hue'] as int,
+              swatchId: swatchIdForHue(r['hue'] as int),
             ))
         .toList();
   }
@@ -123,7 +124,7 @@ class SqliteTaskRepository implements TaskRepository {
   Future<void> upsertTag(Tag tag) async {
     await _db.insert(
       'tag',
-      {'id': tag.id, 'name': tag.name, 'hue': tag.hue},
+      {'id': tag.id, 'name': tag.name, 'hue': hueForSwatchId(tag.swatchId)},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     _notify();
@@ -177,8 +178,10 @@ class SqliteTaskRepository implements TaskRepository {
       actualEnd: r['actual_end'] as int?,
       isDone: (r['is_done'] as int) != 0,
       primaryTagId: r['primary_tag_id'] as String?,
-      autoHue: r['auto_hue'] as int,
-      overrideHue: r['override_hue'] as int?,
+      autoSwatchId: swatchIdForHue(r['auto_hue'] as int),
+      overrideSwatchId: r['override_hue'] != null
+          ? swatchIdForHue(r['override_hue'] as int)
+          : null,
       notes: r['notes'] as String?,
       createdAt: r['created_at'] as int,
     );
@@ -194,8 +197,10 @@ class SqliteTaskRepository implements TaskRepository {
       'actual_end': t.actualEnd,
       'is_done': t.isDone ? 1 : 0,
       'primary_tag_id': t.primaryTagId,
-      'auto_hue': t.autoHue,
-      'override_hue': t.overrideHue,
+      'auto_hue': hueForSwatchId(t.autoSwatchId),
+      'override_hue': t.overrideSwatchId != null
+          ? hueForSwatchId(t.overrideSwatchId!)
+          : null,
       'notes': t.notes,
       'created_at': t.createdAt,
     };
