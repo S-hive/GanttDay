@@ -54,4 +54,29 @@ class ArgbColor {
     }
     return ArgbHsl(hue: h * 360, saturation: s, lightness: l);
   }
+
+  /// Standard HSL → opaque ARGB (same convention as Flutter HSLColor).
+  static int fromHsl(double hue, double saturation, double lightness) {
+    final h = hue % 360;
+    final s = saturation.clamp(0.0, 1.0);
+    final l = lightness.clamp(0.0, 1.0);
+    if (s == 0) {
+      final v = (l * 255).round();
+      return 0xFF000000 | (v << 16) | (v << 8) | v;
+    }
+    final q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    final p = 2 * l - q;
+    double hue2rgb(double t) {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    }
+    final r = (hue2rgb(h / 360 + 1 / 3) * 255).round();
+    final g = (hue2rgb(h / 360) * 255).round();
+    final b = (hue2rgb(h / 360 - 1 / 3) * 255).round();
+    return 0xFF000000 | (r << 16) | (g << 8) | b;
+  }
 }

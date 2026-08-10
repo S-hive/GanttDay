@@ -197,7 +197,7 @@ class BackupService {
           await txn.insert('tag', {
             'id': tag.id,
             'name': tag.name,
-            'hue': hueForSwatchId(tag.swatchId),
+            'swatch_id': tag.swatchId,
           });
           importedTags++;
         }
@@ -222,10 +222,8 @@ class BackupService {
           'actual_end': task.actualEnd,
           'is_done': task.isDone ? 1 : 0,
           'primary_tag_id': task.primaryTagId,
-          'auto_hue': hueForSwatchId(task.autoSwatchId),
-          'override_hue': task.overrideSwatchId != null
-              ? hueForSwatchId(task.overrideSwatchId!)
-              : null,
+          'auto_swatch_id': task.autoSwatchId,
+          'override_swatch_id': task.overrideSwatchId,
           'notes': task.notes,
           'created_at': task.createdAt,
         });

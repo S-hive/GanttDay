@@ -31,7 +31,7 @@ void main() {
         title: 'render video overnight',
         plannedStart: WallClock.minutes(DateTime(2026, 8, 8, 23, 0)),
         plannedEnd: WallClock.minutes(DateTime(2026, 8, 9, 1, 0)),
-        autoHue: 200,
+        autoSwatchId: 'sky',
         createdAt: 0,
       );
 
@@ -52,7 +52,7 @@ void main() {
       title: 'ends at midnight',
       plannedStart: WallClock.minutes(DateTime(2026, 8, 8, 22, 0)),
       plannedEnd: WallClock.minutes(DateTime(2026, 8, 9, 0, 0)),
-      autoHue: 10,
+      autoSwatchId: 'peach',
       createdAt: 0,
     );
     await repo.upsert(t);
@@ -101,8 +101,8 @@ void main() {
   test('tag CRUD and task-tag assignment', () async {
     final t = overnightTask();
     await repo.upsert(t);
-    await repo.upsertTag(const Tag(id: 'tg1', name: 'edit', hue: 120));
-    await repo.upsertTag(const Tag(id: 'tg2', name: 'shoot', hue: 30));
+    await repo.upsertTag(const Tag(id: 'tg1', name: 'edit', swatchId: 'leaf'));
+    await repo.upsertTag(const Tag(id: 'tg2', name: 'shoot', swatchId: 'peach'));
     await repo.setTaskTags(t.id, ['tg1', 'tg2']);
     expect(await repo.tagIdsForTask(t.id), unorderedEquals(['tg1', 'tg2']));
 
@@ -119,11 +119,11 @@ void main() {
       plannedStart: 100,
       plannedEnd: 200,
       primaryTagId: 'tg1',
-      autoHue: 42,
+      autoSwatchId: 'azure',
       createdAt: 0,
     );
     await repo.upsert(t);
-    await repo.upsertTag(const Tag(id: 'tg1', name: 'edit', hue: 120));
+    await repo.upsertTag(const Tag(id: 'tg1', name: 'edit', swatchId: 'leaf'));
     await repo.setTaskTags(t.id, ['tg1']);
     await repo.deleteTag('tg1');
     expect(await repo.listTags(), isEmpty);
@@ -134,7 +134,7 @@ void main() {
   test('delete removes task and its tag links', () async {
     final t = overnightTask();
     await repo.upsert(t);
-    await repo.upsertTag(const Tag(id: 'tg1', name: 'edit', hue: 120));
+    await repo.upsertTag(const Tag(id: 'tg1', name: 'edit', swatchId: 'leaf'));
     await repo.setTaskTags(t.id, ['tg1']);
     await repo.delete(t.id);
     expect(await repo.getById(t.id), isNull);

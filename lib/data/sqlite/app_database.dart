@@ -1,6 +1,7 @@
 import 'package:sqflite_common/sqlite_api.dart';
 
 import '../../platform/task_repository.dart' show DatabaseOpenException;
+import 'swatch_migration.dart';
 
 /// Opens the GanttDay database. On any open failure it throws
 /// [DatabaseOpenException] — it never wipes or silently recreates the file
@@ -8,7 +9,7 @@ import '../../platform/task_repository.dart' show DatabaseOpenException;
 class AppDatabase {
   AppDatabase._();
 
-  static const int schemaVersion = 1;
+  static const int schemaVersion = 2;
 
   static Future<Database> open(
     DatabaseFactory factory,
@@ -19,7 +20,15 @@ class AppDatabase {
         path,
         options: OpenDatabaseOptions(
           version: schemaVersion,
-          onCreate: (db, version) => applySchema(db),
+          onCreate: (db, version) async {
+            await applySchema(db);
+            await seedFactorySwatches(db);
+          },
+          onUpgrade: (db, oldVersion, newVersion) async {
+            if (oldVersion < 2) {
+              await migrateV1toV2(db);
+            }
+          },
         ),
       );
     } catch (e) {
@@ -28,6 +37,19 @@ class AppDatabase {
   }
 
   static Future<void> applySchema(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE color_swatch (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        argb INTEGER NOT NULL,
+        hue INTEGER NOT NULL,
+        saturation REAL NOT NULL,
+        lightness REAL NOT NULL,
+        is_default INTEGER NOT NULL,
+        sort_order INTEGER NOT NULL,
+        slate INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
     await db.execute('''
       CREATE TABLE task (
         id TEXT PRIMARY KEY,
@@ -38,8 +60,8 @@ class AppDatabase {
         actual_end INTEGER,
         is_done INTEGER NOT NULL DEFAULT 0,
         primary_tag_id TEXT,
-        auto_hue INTEGER NOT NULL,
-        override_hue INTEGER,
+        auto_swatch_id TEXT NOT NULL,
+        override_swatch_id TEXT,
         notes TEXT,
         created_at INTEGER NOT NULL
       )
@@ -51,7 +73,7 @@ class AppDatabase {
       CREATE TABLE tag (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
-        hue INTEGER NOT NULL
+        swatch_id TEXT NOT NULL
       )
     ''');
     await db.execute('''

@@ -35,13 +35,13 @@ void main() {
   });
 
   Future<void> seed() async {
-    await repo.upsertTag(const Tag(id: 'tg1', name: 'edit', hue: 120));
+    await repo.upsertTag(const Tag(id: 'tg1', name: 'edit', swatchId: 'leaf'));
     await repo.upsert(Task(
       id: 't1',
       title: 'clip',
       plannedStart: WallClock.minutes(DateTime(2026, 8, 8, 9)),
       plannedEnd: WallClock.minutes(DateTime(2026, 8, 8, 11)),
-      autoHue: 200,
+      autoSwatchId: 'sky',
       primaryTagId: 'tg1',
       createdAt: 1,
     ));
