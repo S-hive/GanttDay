@@ -1,3 +1,4 @@
+import '../domain/models/color_swatch.dart';
 import '../domain/models/tag.dart';
 import '../domain/models/task.dart';
 import '../domain/time/wall_clock.dart';
@@ -13,6 +14,16 @@ class DatabaseOpenException implements Exception {
   @override
   String toString() =>
       'DatabaseOpenException: $message${path == null ? '' : ' ($path)'}';
+}
+
+/// Thrown when a swatch delete or rebind precondition fails.
+class SwatchOperationException implements Exception {
+  SwatchOperationException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'SwatchOperationException: $message';
 }
 
 abstract class TaskRepository {
@@ -42,4 +53,18 @@ abstract class TaskRepository {
   Future<void> setTaskTags(String taskId, List<String> tagIds);
 
   Future<List<String>> tagIdsForTask(String taskId);
+
+  Future<List<ColorSwatch>> listSwatches();
+
+  /// Re-emits when swatches or task/tag swatch refs change (same bus as tasks).
+  Stream<List<ColorSwatch>> watchSwatches();
+
+  Future<ColorSwatch> defaultSwatch();
+
+  Future<void> upsertSwatch(ColorSwatch swatch);
+
+  Future<void> setDefaultSwatch(String id);
+
+  /// Rebinds task auto/override and tag swatch refs from [id] → [rebindToId], then deletes.
+  Future<void> deleteSwatch(String id, {required String rebindToId});
 }

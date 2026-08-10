@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:sqflite_common/sqlite_api.dart';
 
+import '../../domain/models/color_swatch.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
@@ -165,6 +166,180 @@ class SqliteTaskRepository implements TaskRepository {
       whereArgs: [taskId],
     );
     return rows.map((r) => r['tag_id'] as String).toList();
+  }
+
+  @override
+  Future<List<ColorSwatch>> listSwatches() async {
+    final rows = await _db.query('color_swatch', orderBy: 'sort_order ASC');
+    return rows.map(_swatchFromRow).toList();
+  }
+
+  @override
+  Stream<List<ColorSwatch>> watchSwatches() {
+    late StreamController<List<ColorSwatch>> controller;
+    StreamSubscription<void>? changeSub;
+
+    Future<void> emit() async {
+      final result = await listSwatches();
+      if (!controller.isClosed) controller.add(result);
+    }
+
+    controller = StreamController<List<ColorSwatch>>(
+      onListen: () {
+        emit();
+        changeSub = _changes.stream.listen((_) => emit());
+      },
+      onCancel: () async {
+        await changeSub?.cancel();
+      },
+    );
+    return controller.stream;
+  }
+
+  @override
+  Future<ColorSwatch> defaultSwatch() async {
+    final rows =
+        await _db.query('color_swatch', where: 'is_default = 1', limit: 1);
+    if (rows.isEmpty) {
+      throw StateError('No default color swatch');
+    }
+    return _swatchFromRow(rows.first);
+  }
+
+  @override
+  Future<void> upsertSwatch(ColorSwatch swatch) async {
+    await _db.transaction((txn) async {
+      if (swatch.isDefault) {
+        await txn.update('color_swatch', {'is_default': 0});
+      }
+      await txn.insert(
+        'color_swatch',
+        _rowFromSwatch(swatch),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    });
+    _notify();
+  }
+
+  @override
+  Future<void> setDefaultSwatch(String id) async {
+    final exists = await _db.query(
+      'color_swatch',
+      columns: ['id'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (exists.isEmpty) {
+      throw SwatchOperationException('Swatch not found: $id');
+    }
+    await _db.transaction((txn) async {
+      await txn.update('color_swatch', {'is_default': 0});
+      await txn.update(
+        'color_swatch',
+        {'is_default': 1},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    });
+    _notify();
+  }
+
+  @override
+  Future<void> deleteSwatch(String id, {required String rebindToId}) async {
+    if (id == rebindToId) {
+      throw SwatchOperationException('rebindToId must differ from deleted id');
+    }
+
+    final countRow = await _db.rawQuery(
+      'SELECT COUNT(*) AS c FROM color_swatch',
+    );
+    final count = countRow.first['c'] as int;
+    if (count <= 1) {
+      throw SwatchOperationException('Cannot delete the last swatch');
+    }
+
+    final rebindExists = await _db.query(
+      'color_swatch',
+      columns: ['id'],
+      where: 'id = ?',
+      whereArgs: [rebindToId],
+      limit: 1,
+    );
+    if (rebindExists.isEmpty) {
+      throw SwatchOperationException('Rebind target not found: $rebindToId');
+    }
+
+    final victim = await _db.query(
+      'color_swatch',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (victim.isEmpty) {
+      throw SwatchOperationException('Swatch not found: $id');
+    }
+    final wasDefault = (victim.first['is_default'] as int) != 0;
+
+    await _db.transaction((txn) async {
+      await txn.update(
+        'task',
+        {'auto_swatch_id': rebindToId},
+        where: 'auto_swatch_id = ?',
+        whereArgs: [id],
+      );
+      await txn.update(
+        'task',
+        {'override_swatch_id': rebindToId},
+        where: 'override_swatch_id = ?',
+        whereArgs: [id],
+      );
+      await txn.update(
+        'tag',
+        {'swatch_id': rebindToId},
+        where: 'swatch_id = ?',
+        whereArgs: [id],
+      );
+      await txn.delete('color_swatch', where: 'id = ?', whereArgs: [id]);
+      if (wasDefault) {
+        await txn.update('color_swatch', {'is_default': 0});
+        await txn.update(
+          'color_swatch',
+          {'is_default': 1},
+          where: 'id = ?',
+          whereArgs: [rebindToId],
+        );
+      }
+    });
+    _notify();
+  }
+
+  ColorSwatch _swatchFromRow(Map<String, Object?> r) {
+    return ColorSwatch(
+      id: r['id'] as String,
+      name: r['name'] as String,
+      argb: r['argb'] as int,
+      hue: r['hue'] as int,
+      saturation: (r['saturation'] as num).toDouble(),
+      lightness: (r['lightness'] as num).toDouble(),
+      sortOrder: r['sort_order'] as int,
+      isDefault: (r['is_default'] as int) != 0,
+      slate: (r['slate'] as int) != 0,
+    );
+  }
+
+  Map<String, Object?> _rowFromSwatch(ColorSwatch s) {
+    return {
+      'id': s.id,
+      'name': s.name,
+      'argb': s.argb,
+      'hue': s.hue,
+      'saturation': s.saturation,
+      'lightness': s.lightness,
+      'is_default': s.isDefault ? 1 : 0,
+      'sort_order': s.sortOrder,
+      'slate': s.slate ? 1 : 0,
+    };
   }
 
   Task _taskFromRow(Map<String, Object?> r) {

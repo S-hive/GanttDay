@@ -1,8 +1,12 @@
 import 'package:ganttday/data/sqlite/app_database.dart';
 import 'package:ganttday/data/sqlite/sqlite_task_repository.dart';
+import 'package:ganttday/data/sqlite/swatch_migration.dart';
+import 'package:ganttday/domain/gantt/factory_swatches.dart';
+import 'package:ganttday/domain/models/color_swatch.dart';
 import 'package:ganttday/domain/models/tag.dart';
 import 'package:ganttday/domain/models/task.dart';
 import 'package:ganttday/domain/time/wall_clock.dart';
+import 'package:ganttday/platform/task_repository.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:test/test.dart';
 
@@ -18,6 +22,7 @@ void main() {
   setUp(() async {
     db = await databaseFactory.openDatabase(inMemoryDatabasePath);
     await AppDatabase.applySchema(db);
+    await seedFactorySwatches(db);
     repo = SqliteTaskRepository(db);
   });
 
@@ -139,5 +144,127 @@ void main() {
     await repo.delete(t.id);
     expect(await repo.getById(t.id), isNull);
     expect(await repo.tagIdsForTask(t.id), isEmpty);
+  });
+
+  group('swatch CRUD', () {
+    test('listSwatches returns factory seeds ordered by sort_order', () async {
+      final swatches = await repo.listSwatches();
+      expect(swatches, hasLength(kFactoryColorSwatches.length));
+      expect(swatches.map((s) => s.id).toList(),
+          kFactoryColorSwatches.map((s) => s.id).toList());
+    });
+
+    test('defaultSwatch returns the seeded default', () async {
+      final d = await repo.defaultSwatch();
+      expect(d.id, 'azure');
+      expect(d.isDefault, isTrue);
+    });
+
+    test('upsertSwatch inserts and updates', () async {
+      const custom = ColorSwatch(
+        id: 'custom1',
+        name: 'My red',
+        argb: 0xFFFF0000,
+        hue: 0,
+        saturation: 1.0,
+        lightness: 0.5,
+        sortOrder: 99,
+      );
+      await repo.upsertSwatch(custom);
+      expect(await repo.listSwatches(), contains(predicate<ColorSwatch>(
+          (s) => s.id == 'custom1' && s.name == 'My red')));
+
+      await repo.upsertSwatch(custom.copyWith(name: 'Renamed'));
+      final got =
+          (await repo.listSwatches()).singleWhere((s) => s.id == 'custom1');
+      expect(got.name, 'Renamed');
+    });
+
+    test('upsertSwatch with isDefault clears previous default', () async {
+      await repo.upsertSwatch(
+        kFactoryColorSwatches.firstWhere((s) => s.id == 'mint').copyWith(
+          isDefault: true,
+        ),
+      );
+      final all = await repo.listSwatches();
+      expect(all.where((s) => s.isDefault).map((s) => s.id), ['mint']);
+    });
+
+    test('setDefaultSwatch clears previous default', () async {
+      await repo.setDefaultSwatch('mint');
+      final all = await repo.listSwatches();
+      expect(all.where((s) => s.isDefault).map((s) => s.id), ['mint']);
+    });
+
+    test('deleteSwatch rebinds tasks and tags', () async {
+      const taskId = 'swatch-task';
+      await repo.upsertTag(const Tag(id: 'tg', name: 'a', swatchId: 'peach'));
+      await repo.upsert(Task(
+        id: taskId,
+        title: 'colored',
+        plannedStart: 100,
+        plannedEnd: 200,
+        autoSwatchId: 'peach',
+        overrideSwatchId: 'peach',
+        createdAt: 0,
+      ));
+      await repo.deleteSwatch('peach', rebindToId: 'azure');
+      expect((await repo.listTags()).single.swatchId, 'azure');
+      final task = (await repo.getById(taskId))!;
+      expect(task.autoSwatchId, 'azure');
+      expect(task.overrideSwatchId, 'azure');
+      expect(
+        await repo.listSwatches(),
+        isNot(contains(predicate<ColorSwatch>((s) => s.id == 'peach'))),
+      );
+    });
+
+    test('deleteSwatch sets rebind target as default when deleting default',
+        () async {
+      await repo.deleteSwatch('azure', rebindToId: 'mint');
+      final d = await repo.defaultSwatch();
+      expect(d.id, 'mint');
+    });
+
+    test('cannot delete last swatch', () async {
+      var swatches = await repo.listSwatches();
+      while (swatches.length > 1) {
+        final victim = swatches.firstWhere((s) => !s.isDefault);
+        final rebind = swatches.firstWhere((s) => s.id != victim.id);
+        await repo.deleteSwatch(victim.id, rebindToId: rebind.id);
+        swatches = await repo.listSwatches();
+      }
+      expect(swatches, hasLength(1));
+      expect(
+        () => repo.deleteSwatch(swatches.single.id, rebindToId: 'azure'),
+        throwsA(isA<SwatchOperationException>()),
+      );
+    });
+
+    test('deleteSwatch rejects invalid rebind target', () async {
+      expect(
+        () => repo.deleteSwatch('peach', rebindToId: 'peach'),
+        throwsA(isA<SwatchOperationException>()),
+      );
+      expect(
+        () => repo.deleteSwatch('peach', rebindToId: 'missing'),
+        throwsA(isA<SwatchOperationException>()),
+      );
+    });
+
+    test('watchSwatches emits again after mutation', () async {
+      final stream = repo.watchSwatches();
+      final emissions = <List<ColorSwatch>>[];
+      final sub = stream.listen(emissions.add);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await repo.setDefaultSwatch('mint');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await sub.cancel();
+      expect(emissions.length, 2);
+      expect(
+        emissions.last.where((s) => s.isDefault).map((s) => s.id),
+        ['mint'],
+      );
+    });
   });
 }
