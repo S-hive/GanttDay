@@ -264,6 +264,10 @@ class DayGanttPainter extends CustomPainter {
   /// Always paints the full caption; may extend past the bar's right edge.
   /// Caption X is sticky: max(barLeft, viewportLeft), so long bars keep their
   /// labels readable while scrolling.
+  ///
+  /// When the caption overflows the bar, paints a dark underlayer first, then
+  /// the on-bar foreground clipped to [rect] — bar-interior stays high-contrast
+  /// on the fill; overflow stays readable on the light grid.
   void _paintBarCaption(Canvas canvas, PlacedBar bar, Rect rect) {
     final viewportRight = viewportLeft + viewportWidth;
     // Fully off-screen → skip.
@@ -277,30 +281,47 @@ class DayGanttPainter extends CustomPainter {
 
     const titleSize = 13.0;
     const metaSize = 11.0;
-    final titleStyle = TextStyle(
-      fontSize: titleSize,
-      fontWeight: FontWeight.w700,
-      color: fg,
-      height: 1.15,
-    );
-    final metaStyle = TextStyle(
-      fontSize: metaSize,
-      fontWeight: FontWeight.w500,
-      color: muted,
-      height: 1.15,
-    );
 
-    final line = TextPainter(
-      text: TextSpan(
-        children: [
-          TextSpan(text: bar.title, style: titleStyle),
-          TextSpan(text: '  $timeText', style: metaStyle),
-          if (hasNotes) TextSpan(text: ' · $notes', style: metaStyle),
-        ],
-      ),
-      textDirection: TextDirection.ltr,
-      maxLines: 1,
-    )..layout();
+    TextPainter buildLine(Color titleColor, Color metaColor) {
+      return TextPainter(
+        text: TextSpan(
+          children: [
+            TextSpan(
+              text: bar.title,
+              style: TextStyle(
+                fontSize: titleSize,
+                fontWeight: FontWeight.w700,
+                color: titleColor,
+                height: 1.15,
+              ),
+            ),
+            TextSpan(
+              text: '  $timeText',
+              style: TextStyle(
+                fontSize: metaSize,
+                fontWeight: FontWeight.w500,
+                color: metaColor,
+                height: 1.15,
+              ),
+            ),
+            if (hasNotes)
+              TextSpan(
+                text: ' · $notes',
+                style: TextStyle(
+                  fontSize: metaSize,
+                  fontWeight: FontWeight.w500,
+                  color: metaColor,
+                  height: 1.15,
+                ),
+              ),
+          ],
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+    }
+
+    final line = buildLine(fg, muted);
 
     final textX = stickyCaptionLeft(
       barLeft: rect.left,
@@ -308,12 +329,30 @@ class DayGanttPainter extends CustomPainter {
       viewportLeft: viewportLeft,
       captionWidth: line.width,
     );
-
-    // Full caption; never clip to the bar — short spans still show meta.
-    line.paint(
-      canvas,
-      Offset(textX, rect.top + (rect.height - line.height) / 2),
+    final offset = Offset(
+      textX,
+      rect.top + (rect.height - line.height) / 2,
     );
+
+    final overflows = captionOverflowsBar(
+      textX: textX,
+      captionWidth: line.width,
+      barLeft: rect.left,
+      barRight: rect.right,
+    );
+    if (!overflows) {
+      line.paint(canvas, offset);
+      return;
+    }
+
+    // Outside: dark on light grid; inside: on-bar foreground clipped to bar.
+    const outsideFg = Color(0xDE000000); // ~black87
+    final outside = buildLine(outsideFg, outsideFg.withValues(alpha: 0.78));
+    outside.paint(canvas, offset);
+    canvas.save();
+    canvas.clipRect(rect);
+    line.paint(canvas, offset);
+    canvas.restore();
   }
 
   void _paintHatch(Canvas canvas, Rect rect, Color color) {

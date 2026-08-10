@@ -87,6 +87,36 @@ void main() {
     }
   });
 
+  test('caption overflows when it extends past the bar edges', () {
+    expect(
+      captionOverflowsBar(
+        textX: 10,
+        captionWidth: 200,
+        barLeft: 0,
+        barRight: 120,
+      ),
+      isTrue,
+    );
+    expect(
+      captionOverflowsBar(
+        textX: 10,
+        captionWidth: 80,
+        barLeft: 0,
+        barRight: 120,
+      ),
+      isFalse,
+    );
+    expect(
+      captionOverflowsBar(
+        textX: -5,
+        captionWidth: 40,
+        barLeft: 0,
+        barRight: 120,
+      ),
+      isTrue,
+    );
+  });
+
   test('sticky caption sticks to viewport when bar left is scrolled away', () {
     // Bar [0, 500], viewport at 200, caption 100 wide → stick at 207.
     expect(
