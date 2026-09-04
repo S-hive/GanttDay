@@ -8,6 +8,10 @@
 
 English: A local-first personal Gantt day scheduler for Windows (Flutter).
 
+<img width="1280" height="747" alt="Snipaste_2026-09-04_20-08-50" src="https://github.com/user-attachments/assets/228e0422-dede-4e48-a967-4109cddc03f2" />
+<img width="1280" height="747" alt="Snipaste_2026-09-04_20-06-21" src="https://github.com/user-attachments/assets/74fd3b4a-c25f-4f46-975f-f8fdda2ad2d3" />
+<img width="1280" height="747" alt="Snipaste_2026-09-04_20-05-24" src="https://github.com/user-attachments/assets/2f9ccb7c-88fe-4c6a-93af-97b05d8b6d01" />
+
 ## 功能
 
 - **日 / 周 / 月**视图：横向时间轴，小时网格，15 分钟吸附
