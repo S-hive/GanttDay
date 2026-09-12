@@ -5,46 +5,33 @@ import 'package:test/test.dart';
 
 void main() {
   final azure = kFactoryColorSwatches.firstWhere((s) => s.id == 'azure');
+  final peach = kFactoryColorSwatches.firstWhere((s) => s.id == 'peach');
 
-  test('outside urgency window uses minimum vividness', () {
-    final now = WallClock.minutes(DateTime(2026, 8, 1));
+  test('unfinished uses base swatch S/L even inside former urgency window', () {
     final end = WallClock.minutes(DateTime(2026, 8, 20));
-    final p = UrgencyPalette.paint(
-      base: azure,
+    final far = UrgencyPalette.paint(
+      base: peach,
       plannedStart: end - 60,
       plannedEnd: end,
-      now: now,
+      now: WallClock.minutes(DateTime(2026, 8, 1)),
       isDone: false,
       urgencyWindowDays: 7,
     );
-    expect(p.planned.saturation, closeTo(azure.saturation, 1e-9));
-    expect(p.planned.hatchOverdue, false);
-    expect(p.actual, isNull);
-  });
-
-  test('urgency grows linearly inside the window', () {
-    final end = WallClock.minutes(DateTime(2026, 8, 20));
-    double satAt(int daysBefore) => UrgencyPalette.paint(
-          base: azure,
-          plannedStart: end - 60,
-          plannedEnd: end,
-          now: end - daysBefore * 24 * 60,
-          isDone: false,
-          urgencyWindowDays: 7,
-        ).planned.saturation;
-    final half = satAt(7) + (satAt(0) - satAt(7)) / 2;
-    expect(satAt(7), closeTo(azure.saturation, 1e-9));
-    expect(satAt(0), closeTo(1.0, 1e-9));
-    // linear: 3.5 days out sits exactly halfway
-    final at35 = UrgencyPalette.paint(
-      base: azure,
+    final near = UrgencyPalette.paint(
+      base: peach,
       plannedStart: end - 60,
       plannedEnd: end,
-      now: end - (7 * 24 * 60) ~/ 2,
+      now: end - 60, // almost due
       isDone: false,
       urgencyWindowDays: 7,
-    ).planned.saturation;
-    expect(at35, closeTo(half, 1e-9));
+    );
+    expect(far.planned.saturation, closeTo(peach.saturation, 1e-9));
+    expect(far.planned.lightness, closeTo(peach.lightness, 1e-9));
+    expect(near.planned.saturation, closeTo(peach.saturation, 1e-9));
+    expect(near.planned.lightness, closeTo(peach.lightness, 1e-9));
+    expect(near.planned.hue, peach.hue);
+    expect(far.planned.hatchOverdue, false);
+    expect(far.actual, isNull);
   });
 
   test('overdue unfinished is solid gray without hatch', () {
@@ -74,11 +61,11 @@ void main() {
     expect(wayOver.planned.lightness, justOver.planned.lightness);
   });
 
-  test('completed returns gray planned and vivid actual without hatch', () {
+  test('completed uses gray planned and base-swatch actual', () {
     final start = WallClock.minutes(DateTime(2026, 8, 8, 9));
     final end = start + 180;
     final p = UrgencyPalette.paint(
-      base: azure,
+      base: peach,
       plannedStart: start,
       plannedEnd: end,
       now: end + 60,
@@ -91,6 +78,9 @@ void main() {
     expect(p.planned.hatchOverdue, false);
     expect(p.actual, isNotNull);
     expect(p.actual!.hatchOverdue, false);
-    expect(p.actual!.saturation, greaterThan(0.7));
+    expect(p.actual!.isPlannedGray, false);
+    expect(p.actual!.hue, peach.hue);
+    expect(p.actual!.saturation, closeTo(peach.saturation, 1e-9));
+    expect(p.actual!.lightness, closeTo(peach.lightness, 1e-9));
   });
 }

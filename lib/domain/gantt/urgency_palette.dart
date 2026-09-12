@@ -26,18 +26,11 @@ class TaskPaint {
   final BarPaint? actual;
 }
 
-/// Color rules from spec section 5: linear urgency toward planned end within
-/// a configurable window; overdue unfinished paints gray (no hatch); completed
-/// tasks show a gray planned bar under a single vivid actual bar.
-///
-/// Palette hues deepen from the swatch's calm S/L toward max vividness.
+/// Bar colors match the resolved swatch (same as tag chips). Overdue unfinished
+/// paints gray; completed tasks show a gray planned bar under a swatch-colored
+/// actual bar. [urgencyWindowDays] is accepted for API stability but unused.
 class UrgencyPalette {
   UrgencyPalette._();
-
-  static const double minSaturation = 0.25;
-  static const double maxSaturation = 1.0;
-  static const double calmLightness = 0.72;
-  static const double urgentLightness = 0.45;
 
   static TaskPaint paint({
     required ColorSwatch base,
@@ -50,6 +43,13 @@ class UrgencyPalette {
     required int urgencyWindowDays,
   }) {
     final baseHue = base.hue;
+    final swatchPaint = BarPaint(
+      hue: baseHue,
+      saturation: base.saturation,
+      lightness: base.lightness,
+      hatchOverdue: false,
+      isPlannedGray: false,
+    );
     if (isDone) {
       return TaskPaint(
         planned: BarPaint(
@@ -59,13 +59,7 @@ class UrgencyPalette {
           hatchOverdue: false,
           isPlannedGray: true,
         ),
-        actual: BarPaint(
-          hue: baseHue,
-          saturation: 0.85,
-          lightness: 0.50,
-          hatchOverdue: false,
-          isPlannedGray: false,
-        ),
+        actual: swatchPaint,
       );
     }
     final remaining = plannedEnd - now;
@@ -81,25 +75,6 @@ class UrgencyPalette {
         ),
       );
     }
-    final windowMin = urgencyWindowDays * WallClock.minutesPerDay;
-    final double t; // 0 = calm, 1 = max urgency (linear within window)
-    if (remaining >= windowMin) {
-      t = 0;
-    } else {
-      t = 1 - (remaining / windowMin);
-    }
-    final baseSat = base.saturation;
-    final baseLight = base.lightness;
-    final sat = baseSat + (maxSaturation - baseSat) * t;
-    final light = baseLight + (urgentLightness - baseLight) * t;
-    return TaskPaint(
-      planned: BarPaint(
-        hue: baseHue,
-        saturation: sat,
-        lightness: light,
-        hatchOverdue: false,
-        isPlannedGray: false,
-      ),
-    );
+    return TaskPaint(planned: swatchPaint);
   }
 }
