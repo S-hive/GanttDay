@@ -1,14 +1,19 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
+
+import 'package:flutter/material.dart' hide ColorSwatch;
 
 import '../../app.dart';
+import '../../domain/models/color_swatch.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
+import '../common/side_drawer.dart';
 import '../day/day_gantt_page.dart';
 import '../month/month_page.dart';
 import '../settings/settings_page.dart';
 import '../task/task_form_page.dart';
 import '../week/week_gantt_page.dart';
+import 'view_nav_bar.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key, required this.services});
@@ -24,16 +29,53 @@ class _AppShellState extends State<AppShell> {
   int _navIndex = 0; // 0 day, 1 week, 2 month
   Set<String> _filterTagIds = {};
   List<Tag> _tags = const [];
+  Map<String, ColorSwatch> _swatchesById = const {};
+
+  /// Day actual-edit mode: hide AppBar; tip banner replaces it.
+  bool _dayActualEditMode = false;
+
+  StreamSubscription<List<ColorSwatch>>? _swatchesSub;
+
+  ColorSwatch? get _defaultSwatch {
+    for (final s in _swatchesById.values) {
+      if (s.isDefault) return s;
+    }
+    return _swatchesById.isEmpty ? null : _swatchesById.values.first;
+  }
+
+  Color _tagColor(String swatchId) {
+    final swatch = _swatchesById[swatchId] ?? _defaultSwatch;
+    if (swatch == null) return Colors.grey;
+    return Color(swatch.argb);
+  }
 
   @override
   void initState() {
     super.initState();
     _reloadTags();
+    _swatchesSub = widget.services.tasks.watchSwatches().listen((swatches) {
+      if (!mounted) return;
+      setState(() {
+        _swatchesById = {for (final s in swatches) s.id: s};
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _swatchesSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _reloadTags() async {
     final tags = await widget.services.tasks.listTags();
-    if (mounted) setState(() => _tags = tags);
+    final swatches = await widget.services.tasks.listSwatches();
+    if (mounted) {
+      setState(() {
+        _tags = tags;
+        _swatchesById = {for (final s in swatches) s.id: s};
+      });
+    }
   }
 
   void _shift(int delta) {
@@ -49,30 +91,28 @@ class _AppShellState extends State<AppShell> {
   }
 
   Future<void> _openForm({Task? existing}) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => TaskFormPage(
-          services: widget.services,
-          existing: existing,
-          initialStart: existing == null
-              ? WallClock.minutes(
-                  DateTime(_date.year, _date.month, _date.day, 9))
-              : null,
-          initialEnd: existing == null
-              ? WallClock.minutes(
-                  DateTime(_date.year, _date.month, _date.day, 10))
-              : null,
-        ),
+    await showSideDrawer<void>(
+      context: context,
+      builder: (_) => TaskFormPage(
+        services: widget.services,
+        existing: existing,
+        initialStart: existing == null
+            ? WallClock.minutes(
+                DateTime(_date.year, _date.month, _date.day, 9))
+            : null,
+        initialEnd: existing == null
+            ? WallClock.minutes(
+                DateTime(_date.year, _date.month, _date.day, 10))
+            : null,
       ),
     );
     await _reloadTags();
   }
 
   Future<void> _openSettings() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SettingsPage(services: widget.services),
-      ),
+    await showSideDrawer<void>(
+      context: context,
+      builder: (_) => SettingsPage(services: widget.services),
     );
     await _reloadTags();
   }
@@ -98,99 +138,101 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            const Text('GanttDay'),
-            const SizedBox(width: 24),
-            IconButton(
-              icon: const Icon(Icons.chevron_left),
-              onPressed: () => _shift(-1),
-            ),
-            Text(_titleLabel, style: const TextStyle(fontSize: 16)),
-            IconButton(
-              icon: const Icon(Icons.chevron_right),
-              onPressed: () => _shift(1),
-            ),
-            TextButton(
-              onPressed: () => setState(() => _date = DateTime.now()),
-              child: const Text('今天'),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: '',
-            onPressed: _openSettings,
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          if (_tags.isNotEmpty && _navIndex != 2)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: [
-                    FilterChip(
-                      label: const Text('全部'),
-                      selected: _filterTagIds.isEmpty,
-                      onSelected: (_) => setState(() => _filterTagIds = {}),
-                    ),
-                    for (final tag in _tags)
-                      FilterChip(
-                        label: Text(tag.name),
-                        selected: _filterTagIds.contains(tag.id),
-                        avatar: CircleAvatar(
-                          backgroundColor: HSLColor.fromAHSL(
-                                  1, tag.hue.toDouble(), 0.7, 0.55)
-                              .toColor(),
-                          radius: 8,
-                        ),
-                        onSelected: (sel) => setState(() {
-                          final next = {..._filterTagIds};
-                          if (sel) {
-                            next.add(tag.id);
-                          } else {
-                            next.remove(tag.id);
-                          }
-                          _filterTagIds = next;
-                        }),
-                      ),
-                  ],
-                ),
+      appBar: _dayActualEditMode
+          ? null
+          : AppBar(
+              title: Row(
+                children: [
+                  const Text('GanttDay'),
+                  const SizedBox(width: 24),
+                  IconButton(
+                    icon: const Icon(Icons.chevron_left),
+                    onPressed: () => _shift(-1),
+                  ),
+                  Text(_titleLabel, style: const TextStyle(fontSize: 16)),
+                  IconButton(
+                    icon: const Icon(Icons.chevron_right),
+                    onPressed: () => _shift(1),
+                  ),
+                  TextButton(
+                    onPressed: () => setState(() => _date = DateTime.now()),
+                    child: const Text('今天'),
+                  ),
+                ],
               ),
+              actions: [
+                if (_tags.isNotEmpty)
+                  MenuAnchor(
+                    builder: (context, controller, child) {
+                      return IconButton(
+                        tooltip: '标签筛选',
+                        onPressed: () {
+                          if (controller.isOpen) {
+                            controller.close();
+                          } else {
+                            controller.open();
+                          }
+                        },
+                        icon: Badge(
+                          isLabelVisible: _filterTagIds.isNotEmpty,
+                          smallSize: 8,
+                          child: const Icon(Icons.filter_list),
+                        ),
+                      );
+                    },
+                    menuChildren: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 360),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 4,
+                            children: [
+                              FilterChip(
+                                label: const Text('全部'),
+                                selected: _filterTagIds.isEmpty,
+                                onSelected: (_) =>
+                                    setState(() => _filterTagIds = {}),
+                              ),
+                              for (final tag in _tags)
+                                FilterChip(
+                                  label: Text(tag.name),
+                                  selected: _filterTagIds.contains(tag.id),
+                                  avatar: CircleAvatar(
+                                    backgroundColor: _tagColor(tag.swatchId),
+                                    radius: 8,
+                                  ),
+                                  onSelected: (sel) => setState(() {
+                                    final next = {..._filterTagIds};
+                                    if (sel) {
+                                      next.add(tag.id);
+                                    } else {
+                                      next.remove(tag.id);
+                                    }
+                                    _filterTagIds = next;
+                                  }),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.settings_outlined),
+                  tooltip: '',
+                  onPressed: _openSettings,
+                ),
+              ],
             ),
-          Expanded(child: _buildBody()),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        height: 56,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
+      body: _buildBody(),
+      bottomNavigationBar: ViewNavBar(
         selectedIndex: _navIndex,
-        onDestinationSelected: (i) => setState(() => _navIndex = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.view_day_outlined),
-            label: '日',
-            tooltip: '',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.view_week_outlined),
-            label: '周',
-            tooltip: '',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            label: '月',
-            tooltip: '',
-          ),
-        ],
+        onDestinationSelected: (i) => setState(() {
+          _navIndex = i;
+          _dayActualEditMode = false;
+        }),
       ),
     );
   }
@@ -216,6 +258,7 @@ class _AppShellState extends State<AppShell> {
           child: MonthPage(
             services: widget.services,
             month: _date,
+            filterTagIds: _filterTagIds,
             onOpenDay: (day) => setState(() {
               _date = day;
               _navIndex = 0;
@@ -228,6 +271,10 @@ class _AppShellState extends State<AppShell> {
           date: _date,
           filterTagIds: _filterTagIds,
           onBarTap: (task) => _openForm(existing: task),
+          onActualEditModeChanged: (active) {
+            if (!mounted || _dayActualEditMode == active) return;
+            setState(() => _dayActualEditMode = active);
+          },
         );
     }
   }

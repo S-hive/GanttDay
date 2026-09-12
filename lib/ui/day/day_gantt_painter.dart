@@ -24,6 +24,7 @@ class PlacedBar {
     this.actualX,
     this.actualWidth,
     this.actualPaint,
+    this.isActualSpan = false,
   });
 
   final String taskId;
@@ -46,6 +47,9 @@ class PlacedBar {
   final double? actualX;
   final double? actualWidth;
   final BarPaint? actualPaint;
+
+  /// In actual-edit mode: this placed bar is the actual span (not planned ref).
+  final bool isActualSpan;
 }
 
 class HourMark {
@@ -125,8 +129,16 @@ class DayGanttPainter extends CustomPainter {
       ..color = Colors.black.withValues(alpha: 0.08)
       ..strokeWidth = 1;
 
-    for (var r = 0; r <= rowCount; r++) {
+    // Fill the full canvas height with lane lines (not just task rows).
+    final bodyHeight =
+        math.max(0.0, size.height - DayGanttLayout.headerHeight);
+    final paintedRows = math.max(
+      rowCount,
+      (bodyHeight / DayGanttLayout.laneHeight).ceil(),
+    );
+    for (var r = 0; r <= paintedRows; r++) {
       final y = DayGanttLayout.headerHeight + r * DayGanttLayout.laneHeight;
+      if (y > size.height) break;
       canvas.drawLine(Offset(0, y), Offset(size.width, y), rowPaint);
     }
 
@@ -217,18 +229,34 @@ class DayGanttPainter extends CustomPainter {
         bar.lane * DayGanttLayout.laneHeight +
         DayGanttLayout.barGap;
     final height = DayGanttLayout.barHeight;
-    final rect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(bar.x + 1, top, math.max(bar.width - 2, 2), height),
-      const Radius.circular(4),
-    );
+    final rect =
+        Rect.fromLTWH(bar.x + 1, top, math.max(bar.width - 2, 2), height);
 
-    canvas.drawRRect(
+    if (bar.isActualSpan) {
+      // Same ghost style as drag-create preview: light fill + strong border.
+      final accent = borderColorOf(bar.paint);
+      canvas.drawRect(
+        rect,
+        Paint()..color = colorOf(bar.paint).withValues(alpha: 0.22),
+      );
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..color = accent
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
+      _paintBarCaption(canvas, bar, rect, forceDarkText: true);
+      return;
+    }
+
+    canvas.drawRect(
       rect.shift(const Offset(0, 1.5)),
       Paint()..color = Colors.black.withValues(alpha: 0.08),
     );
 
-    canvas.drawRRect(rect, Paint()..color = colorOf(bar.paint));
-    canvas.drawRRect(
+    canvas.drawRect(rect, Paint()..color = colorOf(bar.paint));
+    canvas.drawRect(
       rect,
       Paint()
         ..color = borderColorOf(bar.paint).withValues(alpha: 0.55)
@@ -237,39 +265,44 @@ class DayGanttPainter extends CustomPainter {
     );
 
     if (bar.paint.hatchOverdue) {
-      _paintHatch(canvas, rect.outerRect, borderColorOf(bar.paint));
+      _paintHatch(canvas, rect, borderColorOf(bar.paint));
     }
 
     if (bar.actualX != null &&
         bar.actualWidth != null &&
         bar.actualPaint != null) {
       final actualHeight = height * 0.28;
-      final actualRect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          bar.actualX! + 1,
-          top + height - actualHeight + 2,
-          math.max(bar.actualWidth! - 2, 2),
-          actualHeight,
-        ),
-        const Radius.circular(3),
+      final actualRect = Rect.fromLTWH(
+        bar.actualX! + 1,
+        top + height - actualHeight + 2,
+        math.max(bar.actualWidth! - 2, 2),
+        actualHeight,
       );
-      canvas.drawRRect(
-          actualRect, Paint()..color = colorOf(bar.actualPaint!));
+      canvas.drawRect(actualRect, Paint()..color = colorOf(bar.actualPaint!));
     }
 
-    _paintBarCaption(canvas, bar, rect.outerRect);
+    _paintBarCaption(canvas, bar, rect);
   }
 
   /// One line: bold title + time range + duration (+ optional notes).
   /// Always paints the full caption; may extend past the bar's right edge.
   /// Caption X is sticky: max(barLeft, viewportLeft), so long bars keep their
   /// labels readable while scrolling.
-  void _paintBarCaption(Canvas canvas, PlacedBar bar, Rect rect) {
+  ///
+  /// When the caption overflows the bar, paints a dark underlayer first, then
+  /// the on-bar foreground clipped to [rect] — bar-interior stays high-contrast
+  /// on the fill; overflow stays readable on the light grid.
+  void _paintBarCaption(
+    Canvas canvas,
+    PlacedBar bar,
+    Rect rect, {
+    bool forceDarkText = false,
+  }) {
     final viewportRight = viewportLeft + viewportWidth;
     // Fully off-screen → skip.
     if (rect.right <= viewportLeft || rect.left >= viewportRight) return;
 
-    final fg = textColorOn(bar.paint);
+    final fg = forceDarkText ? const Color(0xDE000000) : textColorOn(bar.paint);
     final muted = fg.withValues(alpha: 0.78);
     final timeText = formatBarTimeLabel(bar.spanStart, bar.spanEnd);
     final notes = bar.notes?.trim();
@@ -277,30 +310,49 @@ class DayGanttPainter extends CustomPainter {
 
     const titleSize = 13.0;
     const metaSize = 11.0;
-    final titleStyle = TextStyle(
-      fontSize: titleSize,
-      fontWeight: FontWeight.w700,
-      color: fg,
-      height: 1.15,
-    );
-    final metaStyle = TextStyle(
-      fontSize: metaSize,
-      fontWeight: FontWeight.w500,
-      color: muted,
-      height: 1.15,
-    );
 
-    final line = TextPainter(
-      text: TextSpan(
-        children: [
-          TextSpan(text: bar.title, style: titleStyle),
-          TextSpan(text: '  $timeText', style: metaStyle),
-          if (hasNotes) TextSpan(text: ' · $notes', style: metaStyle),
-        ],
-      ),
-      textDirection: TextDirection.ltr,
-      maxLines: 1,
-    )..layout();
+    TextPainter buildLine(Color titleColor, Color metaColor) {
+      final title = bar.title;
+      return TextPainter(
+        text: TextSpan(
+          children: [
+            if (title.isNotEmpty)
+              TextSpan(
+                text: title,
+                style: TextStyle(
+                  fontSize: titleSize,
+                  fontWeight: FontWeight.w700,
+                  color: titleColor,
+                  height: 1.15,
+                ),
+              ),
+            TextSpan(
+              text: title.isEmpty ? timeText : '  $timeText',
+              style: TextStyle(
+                fontSize: metaSize,
+                fontWeight: FontWeight.w500,
+                color: metaColor,
+                height: 1.15,
+              ),
+            ),
+            if (hasNotes)
+              TextSpan(
+                text: ' · $notes',
+                style: TextStyle(
+                  fontSize: metaSize,
+                  fontWeight: FontWeight.w500,
+                  color: metaColor,
+                  height: 1.15,
+                ),
+              ),
+          ],
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+    }
+
+    final line = buildLine(fg, muted);
 
     final textX = stickyCaptionLeft(
       barLeft: rect.left,
@@ -308,17 +360,35 @@ class DayGanttPainter extends CustomPainter {
       viewportLeft: viewportLeft,
       captionWidth: line.width,
     );
-
-    // Full caption; never clip to the bar — short spans still show meta.
-    line.paint(
-      canvas,
-      Offset(textX, rect.top + (rect.height - line.height) / 2),
+    final offset = Offset(
+      textX,
+      rect.top + (rect.height - line.height) / 2,
     );
+
+    final overflows = captionOverflowsBar(
+      textX: textX,
+      captionWidth: line.width,
+      barLeft: rect.left,
+      barRight: rect.right,
+    );
+    if (!overflows) {
+      line.paint(canvas, offset);
+      return;
+    }
+
+    // Outside: dark on light grid; inside: on-bar foreground clipped to bar.
+    const outsideFg = Color(0xDE000000); // ~black87
+    final outside = buildLine(outsideFg, outsideFg.withValues(alpha: 0.78));
+    outside.paint(canvas, offset);
+    canvas.save();
+    canvas.clipRect(rect);
+    line.paint(canvas, offset);
+    canvas.restore();
   }
 
   void _paintHatch(Canvas canvas, Rect rect, Color color) {
     canvas.save();
-    canvas.clipRRect(RRect.fromRectAndRadius(rect, const Radius.circular(8)));
+    canvas.clipRect(rect);
     final paint = Paint()
       ..color = color.withValues(alpha: 0.45)
       ..strokeWidth = 2;

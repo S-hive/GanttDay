@@ -1,3 +1,4 @@
+import 'package:ganttday/domain/gantt/factory_swatches.dart';
 import 'package:ganttday/domain/gantt/day_segmenter.dart';
 import 'package:ganttday/domain/models/task.dart';
 import 'package:ganttday/domain/time/wall_clock.dart';
@@ -13,7 +14,7 @@ Task _task({
     title: 'task',
     plannedStart: WallClock.minutes(start),
     plannedEnd: WallClock.minutes(end),
-    autoHue: 200,
+    autoSwatchId: kDefaultSwatchId,
     createdAt: 0,
   );
 }

@@ -11,15 +11,15 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:uuid/uuid.dart';
 
+import '../lib/domain/gantt/factory_swatches.dart';
+
 /// Same encoding as `WallClock.minutes` (UTC clock-face minutes).
 int wallMinutes(DateTime local) {
   final utc = DateTime.utc(
       local.year, local.month, local.day, local.hour, local.minute);
   return utc.millisecondsSinceEpoch ~/ 60000;
 }
-
-const int kDefaultTaskHue = 218;
-
+import '../../domain/gantt/factory_swatches.dart';
 Future<void> main(List<String> args) async {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
@@ -95,8 +95,8 @@ Future<void> main(List<String> args) async {
         'actual_end': actualEnd,
         'is_done': isDone ? 1 : 0,
         'primary_tag_id': null,
-        'auto_hue': kDefaultTaskHue,
-        'override_hue': null,
+        'auto_swatch_id': kDefaultSwatchId,
+        'override_swatch_id': null,
         'notes': type == 'daily'
             ? '日常'
             : (type == 'multi' ? '跨天' : null),

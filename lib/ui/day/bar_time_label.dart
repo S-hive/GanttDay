@@ -39,6 +39,16 @@ bool spansMultipleCalendarDays(WallMinutes start, WallMinutes end) {
   return WallClock.dayStart(start) != WallClock.dayStart(end - 1);
 }
 
+/// True when the laid-out caption extends past either horizontal edge of the bar.
+bool captionOverflowsBar({
+  required double textX,
+  required double captionWidth,
+  required double barLeft,
+  required double barRight,
+}) {
+  return textX < barLeft || textX + captionWidth > barRight;
+}
+
 /// Horizontal sticky caption origin (content coords):
 /// `max(barLeft, viewportLeft)`, clamped so the caption leaves with the bar's
 /// right edge when the viewport scrolls past the end of the bar.

@@ -1,18 +1,23 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide ColorSwatch;
 
 import '../../app.dart';
-import '../../domain/gantt/color_palette.dart';
+import '../../domain/gantt/factory_swatches.dart';
+import '../../domain/gantt/swatch_resolve.dart';
+import '../../domain/gantt/tag_filter.dart';
 import '../../domain/gantt/urgency_palette.dart';
 import '../../domain/models/app_settings.dart';
+import '../../domain/models/color_swatch.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
 import '../common/bar_detail_tooltip.dart';
+import '../common/side_drawer.dart';
 import '../day/day_gantt_painter.dart';
 import '../task/task_form_page.dart';
 import 'week_column_layout.dart';
+import 'week_slot_geometry.dart';
 
 /// Week calendar: columns = Mon–Sun, rows = time of day.
 class WeekGanttPage extends StatefulWidget {
@@ -58,12 +63,16 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   }
 
   StreamSubscription<List<Task>>? _tasksSub;
+  StreamSubscription<List<ColorSwatch>>? _swatchesSub;
   StreamSubscription<AppSettings>? _settingsSub;
   final ScrollController _vScroll = ScrollController();
   bool _didInitialScroll = false;
+  int _tasksLoadEpoch = 0;
 
   List<Task> _tasks = const [];
   Map<String, Tag> _tags = const {};
+  Map<String, List<String>> _taskTagIds = const {};
+  Map<String, ColorSwatch> _swatchesById = const {};
   AppSettings _settings = const AppSettings();
 
   DateTime get _weekStart {
@@ -79,6 +88,12 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   void initState() {
     super.initState();
     _subscribe();
+    _swatchesSub = widget.services.tasks.watchSwatches().listen((swatches) {
+      if (!mounted) return;
+      setState(() {
+        _swatchesById = {for (final s in swatches) s.id: s};
+      });
+    });
     _settingsSub = widget.services.settings.watch().listen((s) {
       if (mounted) setState(() => _settings = s);
     });
@@ -87,23 +102,31 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   @override
   void didUpdateWidget(WeekGanttPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.anchorDate != widget.anchorDate ||
-        oldWidget.filterTagIds != widget.filterTagIds) {
+    if (oldWidget.anchorDate != widget.anchorDate) {
       _didInitialScroll = false;
       _subscribe();
+    } else if (oldWidget.filterTagIds != widget.filterTagIds) {
+      setState(() {});
     }
   }
 
   void _subscribe() {
     _tasksSub?.cancel();
+    _tasksLoadEpoch++;
     _tasksSub = widget.services.tasks
         .watchTasksOverlapping(_rangeStart, _rangeEnd)
         .listen((tasks) async {
+      final epoch = ++_tasksLoadEpoch;
       final tags = await widget.services.tasks.listTags();
-      if (!mounted) return;
+      final tagIds = <String, List<String>>{};
+      for (final t in tasks) {
+        tagIds[t.id] = await widget.services.tasks.tagIdsForTask(t.id);
+      }
+      if (!mounted || epoch != _tasksLoadEpoch) return;
       setState(() {
         _tasks = tasks;
         _tags = {for (final t in tags) t.id: t};
+        _taskTagIds = tagIds;
       });
     });
   }
@@ -111,39 +134,46 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   @override
   void dispose() {
     _tasksSub?.cancel();
+    _swatchesSub?.cancel();
     _settingsSub?.cancel();
     _vScroll.dispose();
     super.dispose();
   }
 
   List<Task> get _filtered {
-    if (widget.filterTagIds.isEmpty) return _tasks;
     return _tasks
-        .where((t) =>
-            t.primaryTagId != null &&
-            widget.filterTagIds.contains(t.primaryTagId))
+        .where(
+          (t) => taskMatchesTagFilter(
+            primaryTagId: t.primaryTagId,
+            attachedTagIds: _taskTagIds[t.id] ?? const <String>[],
+            filterTagIds: widget.filterTagIds,
+          ),
+        )
         .toList();
   }
 
-  /// Same as month: base palette color; overdue unfinished → gray.
+  ColorSwatch get _defaultSwatch =>
+      _swatchesById[kDefaultSwatchId] ??
+      kFactoryColorSwatches.firstWhere((s) => s.isDefault);
+
+  /// Same as month: base swatch color; overdue unfinished → gray.
   BarPaint _paintFor(Task task) {
-    final hue =
-        task.overrideHue ?? _tags[task.primaryTagId]?.hue ?? task.autoHue;
+    final id = resolveTaskSwatchId(task, _tags);
+    final base = _swatchesById[id] ?? _defaultSwatch;
     final overdue = !task.isDone && task.plannedEnd < WallClock.now();
     if (overdue) {
       return BarPaint(
-        hue: hue,
+        hue: base.hue,
         saturation: 0.12,
         lightness: 0.55,
         hatchOverdue: false,
         isPlannedGray: true,
       );
     }
-    final swatch = swatchForHue(hue);
     return BarPaint(
-      hue: hue,
-      saturation: swatch?.saturation ?? UrgencyPalette.minSaturation,
-      lightness: swatch?.lightness ?? UrgencyPalette.calmLightness,
+      hue: base.hue,
+      saturation: base.saturation,
+      lightness: base.lightness,
       hatchOverdue: false,
       isPlannedGray: false,
     );
@@ -158,12 +188,13 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   }
 
   Future<void> _openTask(Task task) async {
-    await Navigator.of(context).push(MaterialPageRoute(
+    await showSideDrawer<void>(
+      context: context,
       builder: (_) => TaskFormPage(
         services: widget.services,
         existing: task,
       ),
-    ));
+    );
   }
 
   @override
@@ -378,9 +409,13 @@ class _DayColumn extends StatelessWidget {
     required BarPaint paint,
     required VoidCallback onTap,
   }) {
-    final top = slot.topFrac * dayHeight;
-    var height = slot.heightFrac * dayHeight;
-    if (height < 18) height = 18;
+    final vertical = weekBarVerticalRect(
+      topFrac: slot.topFrac,
+      heightFrac: slot.heightFrac,
+      dayHeight: dayHeight,
+    );
+    final top = vertical.top;
+    final height = vertical.height;
     final widthFrac = 1 / slot.columnCount;
     final left = slot.columnIndex * widthFrac * columnWidth + 1.5;
     // Keep a positive width even when many overlapping columns shrink the slot.
@@ -422,11 +457,9 @@ class _DayColumn extends StatelessWidget {
             color: Colors.transparent,
             child: InkWell(
               onTap: onTap,
-              borderRadius: BorderRadius.circular(6),
               child: Ink(
                 decoration: BoxDecoration(
                   color: bg,
-                  borderRadius: BorderRadius.circular(6),
                 ),
                 child: label,
               ),

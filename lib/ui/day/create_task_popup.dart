@@ -71,34 +71,6 @@ class _CreateTaskPopupState extends State<_CreateTaskPopup> {
     }
     top = top.clamp(8.0, media.size.height - estimatedH - 8);
 
-    const labelH = 14.0;
-    const labelGap = 2.0;
-    const labelExtent = labelH + labelGap;
-    final labelAbove = previewMetaLabelAbove(
-      barTop: anchor.top,
-      barBottom: anchor.bottom,
-      labelExtent: labelExtent,
-      clipTop: media.padding.top + 8,
-      clipBottom: media.size.height - media.padding.bottom - 8,
-    );
-    final ghostTop = labelAbove ? anchor.top - labelExtent : anchor.top;
-    final labelStyle = TextStyle(
-      fontSize: 11,
-      color: theme.colorScheme.primary,
-      fontWeight: FontWeight.w600,
-    );
-    final meta = SizedBox(
-      height: labelH,
-      child: Center(
-        child: Text(
-          formatBarTimeLabel(widget.start, widget.end),
-          style: labelStyle,
-          maxLines: 1,
-          overflow: TextOverflow.clip,
-          textAlign: TextAlign.center,
-        ),
-      ),
-    );
     final bar = SizedBox(
       height: anchor.height,
       child: DecoratedBox(
@@ -108,7 +80,6 @@ class _CreateTaskPopupState extends State<_CreateTaskPopup> {
             color: theme.colorScheme.primary,
             width: 1.5,
           ),
-          borderRadius: BorderRadius.circular(6),
         ),
       ),
     );
@@ -118,17 +89,10 @@ class _CreateTaskPopupState extends State<_CreateTaskPopup> {
         // Keep the dragged range visible while naming the task.
         Positioned(
           left: anchor.left,
-          top: ghostTop,
+          top: anchor.top,
           width: math.max(anchor.width, 2),
-          height: anchor.height + labelExtent,
-          child: IgnorePointer(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: labelAbove
-                  ? [meta, const SizedBox(height: labelGap), bar]
-                  : [bar, const SizedBox(height: labelGap), meta],
-            ),
-          ),
+          height: anchor.height,
+          child: IgnorePointer(child: bar),
         ),
         Positioned(
           left: left,
@@ -149,6 +113,13 @@ class _CreateTaskPopupState extends State<_CreateTaskPopup> {
                     '新任务',
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    formatBarTimeLabel(widget.start, widget.end),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
                   const SizedBox(height: 10),

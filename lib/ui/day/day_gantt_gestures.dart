@@ -35,8 +35,10 @@ class DayGanttGestures extends StatefulWidget {
     required this.onCommitUpdate,
     required this.onCreateRange,
     this.onTapTask,
-    this.onSecondaryTapTask,
+    this.onSecondaryTapBar,
+    this.onSecondaryTapEmpty,
     this.onDragTime,
+    this.allowBarDrag = true,
   });
 
   final Widget canvas;
@@ -50,10 +52,14 @@ class DayGanttGestures extends StatefulWidget {
   final void Function(WallMinutes start, WallMinutes end, Rect localBarRect)
       onCreateRange;
   final void Function(Task task)? onTapTask;
-  final void Function(Task task)? onSecondaryTapTask;
+  final void Function(Task task, PlacedBar bar)? onSecondaryTapBar;
+  final VoidCallback? onSecondaryTapEmpty;
 
   /// Live snapped time while create/move/resize is active; `null` when idle.
   final void Function(WallMinutes? time)? onDragTime;
+
+  /// When false, pointer on a bar does not start move/resize (create still works).
+  final bool allowBarDrag;
 
   @override
   State<DayGanttGestures> createState() => _DayGanttGesturesState();
@@ -275,7 +281,7 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
     _cancelLongPress();
 
     final bar = _barAt(e.localPosition);
-    if (bar != null) {
+    if (bar != null && widget.allowBarDrag) {
       _beginBarDrag(bar, e.localPosition);
       return;
     }
@@ -439,11 +445,6 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
     super.dispose();
   }
 
-  static const double _previewLabelHeight = 14;
-  static const double _previewLabelGap = 2;
-  static const double _previewLabelExtent =
-      _previewLabelHeight + _previewLabelGap;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -470,9 +471,9 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
           left: left,
           barTop: barTop,
           width: math.max(right - left, 2),
-          start: range.start,
-          end: range.end,
-          clipBottom: constraints.maxHeight,
+          label: widget.allowBarDrag
+              ? null
+              : formatBarTimeLabel(range.start, range.end),
         ));
       }
 
@@ -488,9 +489,6 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
           left: left,
           barTop: barTop,
           width: math.max(right - left, 2),
-          start: preview.plannedStart,
-          end: preview.plannedEnd,
-          clipBottom: constraints.maxHeight,
         ));
       }
 
@@ -512,9 +510,12 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
           },
           onSecondaryTapUp: (d) {
             final bar = _barAt(d.localPosition);
-            if (bar == null) return;
+            if (bar == null) {
+              widget.onSecondaryTapEmpty?.call();
+              return;
+            }
             final task = _taskOf(bar);
-            if (task != null) widget.onSecondaryTapTask?.call(task);
+            if (task != null) widget.onSecondaryTapBar?.call(task, bar);
           },
           child: Stack(
             clipBehavior: Clip.hardEdge,
@@ -530,54 +531,33 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
     required double left,
     required double barTop,
     required double width,
-    required WallMinutes start,
-    required WallMinutes end,
-    required double clipBottom,
+    String? label,
   }) {
-    final barBottom = barTop + DayGanttLayout.barHeight;
-    final labelAbove = previewMetaLabelAbove(
-      barTop: barTop,
-      barBottom: barBottom,
-      labelExtent: _previewLabelExtent,
-      clipTop: DayGanttLayout.headerHeight,
-      clipBottom: clipBottom,
-    );
-    final overlayTop = labelAbove ? barTop - _previewLabelExtent : barTop;
-    final labelStyle = TextStyle(
-      fontSize: 11,
-      color: theme.colorScheme.primary,
-      fontWeight: FontWeight.w600,
-    );
-    final label = SizedBox(
-      height: _previewLabelHeight,
-      child: Center(
-        child: Text(
-          formatBarTimeLabel(start, end),
-          style: labelStyle,
-          overflow: TextOverflow.clip,
-          maxLines: 1,
-          textAlign: TextAlign.center,
-        ),
-      ),
-    );
-    final bar = Container(
-      height: DayGanttLayout.barHeight,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.primary.withValues(alpha: 0.25),
-        border: Border.all(color: theme.colorScheme.primary, width: 1.5),
-        borderRadius: BorderRadius.circular(6),
-      ),
-    );
     return Positioned(
       left: left,
-      top: overlayTop,
+      top: barTop,
       width: width,
-      height: DayGanttLayout.barHeight + _previewLabelExtent,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: labelAbove
-            ? [label, const SizedBox(height: _previewLabelGap), bar]
-            : [bar, const SizedBox(height: _previewLabelGap), label],
+      height: DayGanttLayout.barHeight,
+      child: Container(
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 7),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.primary.withValues(alpha: 0.25),
+          border: Border.all(color: theme.colorScheme.primary, width: 1.5),
+        ),
+        child: label == null
+            ? null
+            : Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.clip,
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: Colors.black87,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  height: 1.15,
+                ),
+              ),
       ),
     );
   }

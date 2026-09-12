@@ -1,5 +1,5 @@
+import '../models/color_swatch.dart';
 import '../time/wall_clock.dart';
-import 'color_palette.dart';
 
 /// How one bar should be painted. Pure numbers; the UI maps this to actual
 /// Flutter colors (HSL) and hatching.
@@ -26,22 +26,14 @@ class TaskPaint {
   final BarPaint? actual;
 }
 
-/// Color rules from spec section 5: linear urgency toward planned end within
-/// a configurable window; overdue caps vividness and adds hatch; completed
-/// tasks show a gray planned bar under a single vivid actual bar.
-///
-/// Palette hues deepen from the swatch's calm S/L toward max vividness;
-/// custom hues use the legacy calm floor (S=0.25, L=0.72).
+/// Bar colors match the resolved swatch (same as tag chips). Overdue unfinished
+/// paints gray; completed tasks show a gray planned bar under a swatch-colored
+/// actual bar. [urgencyWindowDays] is accepted for API stability but unused.
 class UrgencyPalette {
   UrgencyPalette._();
 
-  static const double minSaturation = 0.25;
-  static const double maxSaturation = 1.0;
-  static const double calmLightness = 0.72;
-  static const double urgentLightness = 0.45;
-
   static TaskPaint paint({
-    required int baseHue,
+    required ColorSwatch base,
     required WallMinutes plannedStart,
     required WallMinutes plannedEnd,
     required WallMinutes now,
@@ -50,6 +42,14 @@ class UrgencyPalette {
     WallMinutes? actualEnd,
     required int urgencyWindowDays,
   }) {
+    final baseHue = base.hue;
+    final swatchPaint = BarPaint(
+      hue: baseHue,
+      saturation: base.saturation,
+      lightness: base.lightness,
+      hatchOverdue: false,
+      isPlannedGray: false,
+    );
     if (isDone) {
       return TaskPaint(
         planned: BarPaint(
@@ -59,39 +59,22 @@ class UrgencyPalette {
           hatchOverdue: false,
           isPlannedGray: true,
         ),
-        actual: BarPaint(
+        actual: swatchPaint,
+      );
+    }
+    final remaining = plannedEnd - now;
+    if (remaining < 0) {
+      // Overdue unfinished: solid gray, same treatment as week/month.
+      return TaskPaint(
+        planned: BarPaint(
           hue: baseHue,
-          saturation: 0.85,
-          lightness: 0.50,
+          saturation: 0.12,
+          lightness: 0.55,
           hatchOverdue: false,
-          isPlannedGray: false,
+          isPlannedGray: true,
         ),
       );
     }
-    final windowMin = urgencyWindowDays * WallClock.minutesPerDay;
-    final remaining = plannedEnd - now;
-    final overdue = remaining < 0;
-    final double t; // 0 = calm, 1 = max urgency (linear within window)
-    if (overdue) {
-      t = 1;
-    } else if (remaining >= windowMin) {
-      t = 0;
-    } else {
-      t = 1 - (remaining / windowMin);
-    }
-    final swatch = swatchForHue(baseHue);
-    final baseSat = swatch?.saturation ?? minSaturation;
-    final baseLight = swatch?.lightness ?? calmLightness;
-    final sat = baseSat + (maxSaturation - baseSat) * t;
-    final light = baseLight + (urgentLightness - baseLight) * t;
-    return TaskPaint(
-      planned: BarPaint(
-        hue: baseHue,
-        saturation: sat,
-        lightness: light,
-        hatchOverdue: overdue,
-        isPlannedGray: false,
-      ),
-    );
+    return TaskPaint(planned: swatchPaint);
   }
 }
