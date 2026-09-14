@@ -1,5 +1,5 @@
-import '../models/color_swatch.dart';
 import '../time/wall_clock.dart';
+import 'argb_color.dart';
 
 /// How one bar should be painted. Pure numbers; the UI maps this to actual
 /// Flutter colors (HSL) and hatching.
@@ -26,14 +26,14 @@ class TaskPaint {
   final BarPaint? actual;
 }
 
-/// Bar colors match the resolved swatch (same as tag chips). Overdue unfinished
-/// paints gray; completed tasks show a gray planned bar under a swatch-colored
+/// Bar colors match the resolved ARGB (same as tag chips). Overdue unfinished
+/// paints gray; completed tasks show a gray planned bar under a color-matched
 /// actual bar. [urgencyWindowDays] is accepted for API stability but unused.
 class UrgencyPalette {
   UrgencyPalette._();
 
   static TaskPaint paint({
-    required ColorSwatch base,
+    required int argb,
     required WallMinutes plannedStart,
     required WallMinutes plannedEnd,
     required WallMinutes now,
@@ -42,11 +42,12 @@ class UrgencyPalette {
     WallMinutes? actualEnd,
     required int urgencyWindowDays,
   }) {
-    final baseHue = base.hue;
+    final hsl = ArgbColor.toHsl(argb);
+    final baseHue = hsl.hue.round() % 360;
     final swatchPaint = BarPaint(
       hue: baseHue,
-      saturation: base.saturation,
-      lightness: base.lightness,
+      saturation: hsl.saturation,
+      lightness: hsl.lightness,
       hatchOverdue: false,
       isPlannedGray: false,
     );

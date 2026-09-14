@@ -1,12 +1,10 @@
-import 'dart:async';
-
-import 'package:flutter/material.dart' hide ColorSwatch;
+import 'package:flutter/material.dart';
 
 import '../../app.dart';
-import '../../domain/models/color_swatch.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
+import '../common/rect_swatch.dart';
 import '../common/side_drawer.dart';
 import '../day/day_gantt_page.dart';
 import '../month/month_page.dart';
@@ -29,51 +27,21 @@ class _AppShellState extends State<AppShell> {
   int _navIndex = 0; // 0 day, 1 week, 2 month
   Set<String> _filterTagIds = {};
   List<Tag> _tags = const [];
-  Map<String, ColorSwatch> _swatchesById = const {};
 
   /// Day actual-edit mode: hide AppBar; tip banner replaces it.
   bool _dayActualEditMode = false;
-
-  StreamSubscription<List<ColorSwatch>>? _swatchesSub;
-
-  ColorSwatch? get _defaultSwatch {
-    for (final s in _swatchesById.values) {
-      if (s.isDefault) return s;
-    }
-    return _swatchesById.isEmpty ? null : _swatchesById.values.first;
-  }
-
-  Color _tagColor(String swatchId) {
-    final swatch = _swatchesById[swatchId] ?? _defaultSwatch;
-    if (swatch == null) return Colors.grey;
-    return Color(swatch.argb);
-  }
 
   @override
   void initState() {
     super.initState();
     _reloadTags();
-    _swatchesSub = widget.services.tasks.watchSwatches().listen((swatches) {
-      if (!mounted) return;
-      setState(() {
-        _swatchesById = {for (final s in swatches) s.id: s};
-      });
-    });
-  }
-
-  @override
-  void dispose() {
-    _swatchesSub?.cancel();
-    super.dispose();
   }
 
   Future<void> _reloadTags() async {
     final tags = await widget.services.tasks.listTags();
-    final swatches = await widget.services.tasks.listSwatches();
     if (mounted) {
       setState(() {
         _tags = tags;
-        _swatchesById = {for (final s in swatches) s.id: s};
       });
     }
   }
@@ -189,29 +157,39 @@ class _AppShellState extends State<AppShell> {
                             spacing: 8,
                             runSpacing: 4,
                             children: [
-                              FilterChip(
-                                label: const Text('全部'),
-                                selected: _filterTagIds.isEmpty,
-                                onSelected: (_) =>
+                              GestureDetector(
+                                onTap: () =>
                                     setState(() => _filterTagIds = {}),
+                                child: Text(
+                                  '全部',
+                                  style: TextStyle(
+                                    fontWeight: _filterTagIds.isEmpty
+                                        ? FontWeight.w700
+                                        : FontWeight.w400,
+                                  ),
+                                ),
                               ),
                               for (final tag in _tags)
-                                FilterChip(
-                                  label: Text(tag.name),
-                                  selected: _filterTagIds.contains(tag.id),
-                                  avatar: CircleAvatar(
-                                    backgroundColor: _tagColor(tag.swatchId),
-                                    radius: 8,
-                                  ),
-                                  onSelected: (sel) => setState(() {
+                                GestureDetector(
+                                  onTap: () => setState(() {
                                     final next = {..._filterTagIds};
-                                    if (sel) {
+                                    if (!next.remove(tag.id)) {
                                       next.add(tag.id);
-                                    } else {
-                                      next.remove(tag.id);
                                     }
                                     _filterTagIds = next;
                                   }),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      RectSwatch(
+                                        argb: tag.argb,
+                                        selected:
+                                            _filterTagIds.contains(tag.id),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(tag.name),
+                                    ],
+                                  ),
                                 ),
                             ],
                           ),

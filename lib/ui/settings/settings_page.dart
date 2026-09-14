@@ -1,14 +1,14 @@
-import 'package:flutter/material.dart' hide ColorSwatch;
+import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
 import '../../data/backup/backup_service.dart';
-import '../../domain/gantt/swatch_resolve.dart';
-import '../../domain/models/app_settings.dart';
-import '../../domain/models/color_swatch.dart';
+import '../../domain/gantt/factory_swatches.dart';
+import '../../domain/models/default_color.dart';
 import '../../domain/models/tag.dart';
-import '../common/swatch_picker.dart';
-import 'swatch_inline_host.dart';
+import '../../platform/task_repository.dart';
+import '../common/argb_color_field.dart';
+import '../common/rect_swatch.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.services});
@@ -20,229 +20,29 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  AppSettings _settings = const AppSettings();
   List<Tag> _tags = const [];
-  List<ColorSwatch> _swatches = const [];
+  List<DefaultColor> _defaults = const [];
   String? _message;
   bool _busy = false;
-
-  Map<String, ColorSwatch> get _swatchesById =>
-      {for (final s in _swatches) s.id: s};
 
   @override
   void initState() {
     super.initState();
     _reload();
-    widget.services.settings.watch().listen((s) {
-      if (mounted) setState(() => _settings = s);
-    });
   }
 
   Future<void> _reload() async {
-    final s = await widget.services.settings.read();
     final tags = await widget.services.tasks.listTags();
-    final swatches = await widget.services.tasks.listSwatches();
+    final defaults = await widget.services.tasks.listDefaultColors();
     if (!mounted) return;
     setState(() {
-      _settings = s;
       _tags = tags;
-      _swatches = swatches;
+      _defaults = defaults;
     });
   }
 
-  Future<void> _write(AppSettings next) async {
-    try {
-      await widget.services.settings.write(next);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _message = '保存设置失败：$e');
-    }
-  }
-
-  ColorSwatch? get _defaultSwatch {
-    for (final s in _swatches) {
-      if (s.isDefault) return s;
-    }
-    return _swatches.isEmpty ? null : _swatches.first;
-  }
-
-  Color _tagColor(String swatchId) {
-    final swatch = _swatchesById[swatchId] ?? _defaultSwatch;
-    if (swatch == null) return Colors.grey;
-    return Color(swatch.argb);
-  }
-
-  Future<void> _setDefaultSwatch(ColorSwatch swatch) async {
-    if (swatch.isDefault) return;
-    try {
-      await widget.services.tasks.setDefaultSwatch(swatch.id);
-      await _reload();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _message = '设置默认色卡失败：$e');
-    }
-  }
-
-  Future<void> _deleteSwatch(ColorSwatch victim) async {
-    if (_swatches.length <= 1) return;
-
-    final others = _swatches.where((s) => s.id != victim.id).toList();
-    final currentDefault = _defaultSwatch ?? others.first;
-    var rebindToId = victim.isDefault ? others.first.id : currentDefault.id;
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('删除色卡？'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 14,
-                    backgroundColor: Color(victim.argb),
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(child: Text('引用该色卡的任务与标签将改绑到：')),
-                ],
-              ),
-              const SizedBox(height: 12),
-              InputDecorator(
-                decoration: const InputDecoration(labelText: '改绑目标'),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    isExpanded: true,
-                    value: rebindToId,
-                    items: [
-                      for (final s in others)
-                        DropdownMenuItem(
-                          value: s.id,
-                          child: Row(
-                            children: [
-                              CircleAvatar(
-                                radius: 10,
-                                backgroundColor: Color(s.argb),
-                              ),
-                              if (s.id == currentDefault.id &&
-                                  !victim.isDefault) ...[
-                                const SizedBox(width: 8),
-                                const Text('当前默认'),
-                              ],
-                            ],
-                          ),
-                        ),
-                    ],
-                    onChanged: (v) {
-                      if (v != null) setLocal(() => rebindToId = v);
-                    },
-                  ),
-                ),
-              ),
-              if (victim.isDefault) ...[
-                const SizedBox(height: 8),
-                const Text('删除默认色卡后，改绑目标将成为新的默认色卡。'),
-              ],
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('删除'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (ok != true) return;
-
-    try {
-      if (victim.isDefault) {
-        await widget.services.tasks.setDefaultSwatch(rebindToId);
-      }
-      await widget.services.tasks.deleteSwatch(victim.id, rebindToId: rebindToId);
-      await _reload();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _message = '删除色卡失败：$e');
-    }
-  }
-
-  Future<void> _addTag() async {
-    final nameCtrl = TextEditingController();
-    var swatchId = farthestSwatchId(
-      _swatches,
-      [
-        for (final t in _tags)
-          if (_swatchesById[t.swatchId] case final swatch?) swatch.hue,
-      ],
-    );
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('新建标签'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: '名称'),
-                autofocus: true,
-              ),
-              const SizedBox(height: 12),
-              SwatchPicker(
-                swatches: _swatches,
-                swatchId: swatchId,
-                onChanged: (id) => setLocal(() => swatchId = id),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('取消')),
-            FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('创建')),
-          ],
-        ),
-      ),
-    );
-    if (ok != true) return;
-    final name = nameCtrl.text.trim();
-    if (name.isEmpty) return;
-    await widget.services.tasks.upsertTag(
-      Tag(id: const Uuid().v4(), name: name, swatchId: swatchId),
-    );
-    await _reload();
-  }
-
-  Future<void> _deleteTag(Tag tag) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('删除标签「${tag.name}」？'),
-        content: const Text('关联会断开，使用该主标签的任务将回退到自动色相。'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('删除')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    await widget.services.tasks.deleteTag(tag.id);
-    await _reload();
+  void _setMessage(String text) {
+    setState(() => _message = text);
   }
 
   Future<void> _export() async {
@@ -279,7 +79,8 @@ class _SettingsPageState extends State<SettingsPage> {
       _message = null;
     });
     try {
-      final path = await widget.services.files.pickOpenPath(extensions: ['json']);
+      final path =
+          await widget.services.files.pickOpenPath(extensions: ['json']);
       if (path == null) return;
       final text = await widget.services.files.readText(path);
       final svc = BackupService(
@@ -308,9 +109,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final sortedSwatches = [..._swatches]
-      ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -328,109 +126,88 @@ class _SettingsPageState extends State<SettingsPage> {
           child: ListView(
             padding: const EdgeInsets.all(20),
             children: [
-              Text('可视时段', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: InputDecorator(
-                      decoration: const InputDecoration(labelText: '开始小时'),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<int>(
-                          isExpanded: true,
-                          value: _settings.visibleStartHour,
-                          items: [
-                            for (var h = 0; h < 24; h++)
-                              DropdownMenuItem(value: h, child: Text('$h:00')),
-                          ],
-                          onChanged: (v) {
-                            if (v == null || v >= _settings.visibleEndHour) {
-                              return;
-                            }
-                            _write(_settings.copyWith(visibleStartHour: v));
-                          },
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: InputDecorator(
-                      decoration: const InputDecoration(labelText: '结束小时'),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<int>(
-                          isExpanded: true,
-                          value: _settings.visibleEndHour,
-                          items: [
-                            for (var h = 1; h <= 24; h++)
-                              DropdownMenuItem(
-                                  value: h,
-                                  child:
-                                      Text(h == 24 ? '24:00' : '$h:00')),
-                          ],
-                          onChanged: (v) {
-                            if (v == null || v <= _settings.visibleStartHour) {
-                              return;
-                            }
-                            _write(_settings.copyWith(visibleEndHour: v));
-                          },
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              Text('紧迫窗口（天）',
-                  style: Theme.of(context).textTheme.titleMedium),
-              Slider(
-                value: _settings.urgencyWindowDays.toDouble().clamp(1, 30),
-                min: 1,
-                max: 30,
-                divisions: 29,
-                label: '${_settings.urgencyWindowDays}',
-                onChanged: (v) =>
-                    _write(_settings.copyWith(urgencyWindowDays: v.round())),
-              ),
-              const SizedBox(height: 16),
-              SwatchInlineHost(
-                swatches: sortedSwatches,
-                defaultArgb: _defaultSwatch?.argb ?? 0xFF457BD9,
-                onUpsert: (swatch) async {
+              TagSettingsList(
+                tags: _tags,
+                onRecolor: (tag, argb) async {
                   try {
-                    await widget.services.tasks.upsertSwatch(swatch);
+                    await widget.services.tasks.upsertTag(
+                      Tag(
+                        id: tag.id,
+                        name: tag.name,
+                        argb: argb,
+                        sortOrder: tag.sortOrder,
+                      ),
+                    );
                     await _reload();
-                  } catch (e) {
-                    if (!mounted) rethrow;
-                    setState(() => _message = '保存色卡失败：$e');
-                    rethrow;
+                  } on TagOperationException catch (e) {
+                    _setMessage(e.message);
                   }
                 },
-                onSetDefault: _setDefaultSwatch,
-                onDelete: _deleteSwatch,
+                onRename: (tag, name) async {
+                  try {
+                    await widget.services.tasks.upsertTag(
+                      Tag(
+                        id: tag.id,
+                        name: name,
+                        argb: tag.argb,
+                        sortOrder: tag.sortOrder,
+                      ),
+                    );
+                    await _reload();
+                  } on TagOperationException catch (e) {
+                    _setMessage(e.message);
+                  }
+                },
+                onDelete: (tag) async {
+                  await widget.services.tasks.deleteTag(tag.id);
+                  await _reload();
+                },
+                onCreate: (name, argb) async {
+                  try {
+                    await widget.services.tasks.upsertTag(
+                      Tag(
+                        id: const Uuid().v4(),
+                        name: name,
+                        argb: argb,
+                        sortOrder: _tags.length,
+                      ),
+                    );
+                    await _reload();
+                  } on TagOperationException catch (e) {
+                    _setMessage(e.message);
+                  }
+                },
               ),
               const SizedBox(height: 24),
-              Row(
-                children: [
-                  Text('标签', style: Theme.of(context).textTheme.titleMedium),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: _addTag,
-                    icon: const Icon(Icons.add),
-                    label: const Text('新建'),
-                  ),
-                ],
+              DefaultColorSettingsList(
+                colors: _defaults,
+                onRecolor: (color, argb) async {
+                  await widget.services.tasks.upsertDefaultColor(
+                    DefaultColor(
+                      id: color.id,
+                      argb: argb,
+                      sortOrder: color.sortOrder,
+                      isCurrent: color.isCurrent,
+                    ),
+                  );
+                  await _reload();
+                },
+                onDelete: (color) async {
+                  await widget.services.tasks.deleteDefaultColor(color.id);
+                  await _reload();
+                },
+                onCreate: (argb) async {
+                  await widget.services.tasks.upsertDefaultColor(
+                    DefaultColor(
+                      id: const Uuid().v4(),
+                      argb: argb,
+                      sortOrder: _defaults.length,
+                      isCurrent: true,
+                    ),
+                  );
+                  await _reload();
+                },
               ),
-              for (final tag in _tags)
-                ListTile(
-                  leading:
-                      CircleAvatar(backgroundColor: _tagColor(tag.swatchId)),
-                  title: Text(tag.name),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () => _deleteTag(tag),
-                  ),
-                ),
               const SizedBox(height: 24),
               Text('备份', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
@@ -456,6 +233,225 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
+      ],
+    );
+  }
+}
+
+class TagSettingsList extends StatefulWidget {
+  const TagSettingsList({
+    super.key,
+    required this.tags,
+    required this.onRecolor,
+    required this.onRename,
+    required this.onDelete,
+    required this.onCreate,
+  });
+
+  final List<Tag> tags;
+  final Future<void> Function(Tag tag, int argb) onRecolor;
+  final Future<void> Function(Tag tag, String name) onRename;
+  final Future<void> Function(Tag tag) onDelete;
+  final Future<void> Function(String name, int argb) onCreate;
+
+  @override
+  State<TagSettingsList> createState() => _TagSettingsListState();
+}
+
+class _TagSettingsListState extends State<TagSettingsList> {
+  String? _editingId;
+  late TextEditingController _nameCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickColor(Tag tag) async {
+    final argb = await showArgbColorPicker(context, initialArgb: tag.argb);
+    if (argb == null) return;
+    await widget.onRecolor(tag, argb);
+  }
+
+  Future<void> _create() async {
+    final nameCtrl = TextEditingController();
+    var argb = kFallbackArgb;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('新建标签'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: '名称'),
+                autofocus: true,
+              ),
+              const SizedBox(height: 12),
+              RectSwatch(
+                argb: argb,
+                onTap: () async {
+                  final picked = await showArgbColorPicker(
+                    ctx,
+                    initialArgb: argb,
+                  );
+                  if (picked != null) setLocal(() => argb = picked);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('创建'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final name = nameCtrl.text.trim();
+    nameCtrl.dispose();
+    if (ok != true) return;
+    if (name.isEmpty) return;
+    await widget.onCreate(name, argb);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text('标签', style: Theme.of(context).textTheme.titleMedium),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: _create,
+              icon: const Icon(Icons.add),
+              label: const Text('新建'),
+            ),
+          ],
+        ),
+        for (final tag in widget.tags)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                RectSwatch(
+                  argb: tag.argb,
+                  onTap: () => _pickColor(tag),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _editingId == tag.id
+                      ? TextField(
+                          controller: _nameCtrl,
+                          autofocus: true,
+                          onSubmitted: (raw) async {
+                            final name = raw.trim();
+                            setState(() => _editingId = null);
+                            if (name.isEmpty) return;
+                            await widget.onRename(tag, name);
+                          },
+                        )
+                      : GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _editingId = tag.id;
+                              _nameCtrl.text = tag.name;
+                            });
+                          },
+                          child: Text(tag.name),
+                        ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: () => widget.onDelete(tag),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class DefaultColorSettingsList extends StatelessWidget {
+  const DefaultColorSettingsList({
+    super.key,
+    required this.colors,
+    required this.onRecolor,
+    required this.onDelete,
+    required this.onCreate,
+  });
+
+  final List<DefaultColor> colors;
+  final Future<void> Function(DefaultColor color, int argb) onRecolor;
+  final Future<void> Function(DefaultColor color) onDelete;
+  final Future<void> Function(int argb) onCreate;
+
+  Future<void> _pick(BuildContext context, DefaultColor color) async {
+    final argb = await showArgbColorPicker(context, initialArgb: color.argb);
+    if (argb == null) return;
+    await onRecolor(color, argb);
+  }
+
+  Future<void> _create(BuildContext context) async {
+    final argb = await showArgbColorPicker(
+      context,
+      initialArgb: kFallbackArgb,
+    );
+    if (argb == null) return;
+    await onCreate(argb);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text('默认色', style: Theme.of(context).textTheme.titleMedium),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: () => _create(context),
+              icon: const Icon(Icons.add),
+              label: const Text('新建'),
+            ),
+          ],
+        ),
+        for (final color in colors)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                RectSwatch(
+                  argb: color.argb,
+                  selected: color.isCurrent,
+                  onTap: () => _pick(context, color),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: () => onDelete(color),
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }

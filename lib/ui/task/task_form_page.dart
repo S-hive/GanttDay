@@ -1,15 +1,16 @@
-import 'package:flutter/material.dart' hide ColorSwatch;
+import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
-import '../../domain/gantt/swatch_resolve.dart';
-import '../../domain/models/color_swatch.dart';
+import '../../domain/gantt/factory_swatches.dart';
 import '../../domain/gantt/gantt_geometry.dart';
+import '../../domain/models/default_color.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/inline_datetime.dart';
 import '../../domain/time/wall_clock.dart';
-import '../common/swatch_picker.dart';
+import '../common/argb_color_field.dart';
+import '../common/rect_swatch.dart';
 import 'plan_datetime_accordion.dart';
 
 /// Create / edit a task. Validates end > start before saving.
@@ -43,11 +44,10 @@ class _TaskFormPageState extends State<TaskFormPage> {
   late final TextEditingController _planMinute;
   late DateTime _start;
   late DateTime _end;
-  String? _primaryTagId;
-  String? _overrideSwatchId;
+  String? _tagId;
+  int? _overrideArgb;
   List<Tag> _tags = const [];
-  List<ColorSwatch> _swatches = const [];
-  List<String> _tagIds = const [];
+  List<DefaultColor> _defaults = const [];
   String? _error;
   bool _saving = false;
   PlanEditorTarget _planEditor = PlanEditorTarget.none;
@@ -64,8 +64,8 @@ class _TaskFormPageState extends State<TaskFormPage> {
       _notes = TextEditingController(text: existing.notes ?? '');
       _start = WallClock.dateTime(existing.plannedStart);
       _end = WallClock.dateTime(existing.plannedEnd);
-      _primaryTagId = existing.primaryTagId;
-      _overrideSwatchId = existing.overrideSwatchId;
+      _tagId = existing.tagId;
+      _overrideArgb = existing.overrideArgb;
     } else {
       _title = TextEditingController();
       _notes = TextEditingController();
@@ -86,35 +86,13 @@ class _TaskFormPageState extends State<TaskFormPage> {
     _loadTags();
   }
 
-  Map<String, ColorSwatch> get _swatchesById =>
-      {for (final s in _swatches) s.id: s};
-
-  ColorSwatch? get _defaultSwatch {
-    for (final s in _swatches) {
-      if (s.isDefault) return s;
-    }
-    return _swatches.isEmpty ? null : _swatches.first;
-  }
-
-  Color _tagColor(String swatchId) {
-    final swatch = _swatchesById[swatchId] ?? _defaultSwatch;
-    if (swatch == null) return Colors.grey;
-    return Color(swatch.argb);
-  }
-
   Future<void> _loadTags() async {
     final tags = await widget.services.tasks.listTags();
-    final swatches = await widget.services.tasks.listSwatches();
-    List<String> assigned = const [];
-    if (widget.existing != null) {
-      assigned =
-          await widget.services.tasks.tagIdsForTask(widget.existing!.id);
-    }
+    final defaults = await widget.services.tasks.listDefaultColors();
     if (!mounted) return;
     setState(() {
       _tags = tags;
-      _swatches = swatches;
-      _tagIds = assigned;
+      _defaults = defaults;
     });
   }
 
@@ -225,36 +203,36 @@ class _TaskFormPageState extends State<TaskFormPage> {
     });
 
     try {
+      final notes = _notes.text.trim().isEmpty ? null : _notes.text.trim();
       final Task task;
       if (_isEdit) {
         final e = widget.existing!;
-        task = e.copyWith(
-          title: title,
-          plannedStart: start,
-          plannedEnd: end,
-          primaryTagId: _primaryTagId,
-          overrideSwatchId: _overrideSwatchId,
-          notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
-          clearPrimaryTag: _primaryTagId == null,
-          clearOverrideSwatch: _overrideSwatchId == null,
-          clearNotes: _notes.text.trim().isEmpty,
+        task = applyFormPaint(
+          e.copyWith(
+            title: title,
+            plannedStart: start,
+            plannedEnd: end,
+            notes: notes,
+            clearNotes: notes == null,
+          ),
+          tagId: _tagId,
+          overrideArgb: _overrideArgb,
         );
       } else {
-        final defaultSwatch = await widget.services.tasks.defaultSwatch();
-        task = Task(
-          id: const Uuid().v4(),
-          title: title,
-          plannedStart: start,
-          plannedEnd: end,
-          primaryTagId: _primaryTagId,
-          autoSwatchId: defaultSwatch.id,
-          overrideSwatchId: _overrideSwatchId,
-          notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
-          createdAt: WallClock.now(),
+        task = applyFormPaint(
+          Task(
+            id: const Uuid().v4(),
+            title: title,
+            plannedStart: start,
+            plannedEnd: end,
+            notes: notes,
+            createdAt: WallClock.now(),
+          ),
+          tagId: _tagId,
+          overrideArgb: _overrideArgb,
         );
       }
       await widget.services.tasks.upsert(task);
-      await widget.services.tasks.setTaskTags(task.id, _tagIds);
       if (!mounted) return false;
       Navigator.of(context).pop(task);
       return true;
@@ -368,88 +346,21 @@ class _TaskFormPageState extends State<TaskFormPage> {
                 ),
               ),
               const SizedBox(height: 16),
-              Text('主标签（决定颜色）',
-                  style: theme.textTheme.titleSmall),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  ChoiceChip(
-                    label: const Text('无'),
-                    selected: _primaryTagId == null,
-                    onSelected: (_) => setState(() => _primaryTagId = null),
-                  ),
-                  for (final tag in _tags)
-                    ChoiceChip(
-                      label: Text(tag.name),
-                      selected: _primaryTagId == tag.id,
-                      avatar: CircleAvatar(
-                        backgroundColor: _tagColor(tag.swatchId),
-                        radius: 8,
-                      ),
-                      onSelected: (_) => setState(() {
-                        _primaryTagId = tag.id;
-                        if (!_tagIds.contains(tag.id)) {
-                          _tagIds = [..._tagIds, tag.id];
-                        }
-                      }),
-                    ),
-                ],
+              TagPickList(
+                tags: _tags,
+                selectedId: _tagId,
+                onChanged: (id) => setState(() => _tagId = id),
               ),
-              if (_tags.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Text('附加标签', style: theme.textTheme.titleSmall),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final tag in _tags)
-                      FilterChip(
-                        label: Text(tag.name),
-                        selected: _tagIds.contains(tag.id),
-                        onSelected: (sel) => setState(() {
-                          if (sel) {
-                            _tagIds = [..._tagIds, tag.id];
-                          } else {
-                            _tagIds =
-                                _tagIds.where((id) => id != tag.id).toList();
-                            if (_primaryTagId == tag.id) {
-                              _primaryTagId = null;
-                            }
-                          }
-                        }),
-                      ),
-                  ],
-                ),
-              ],
               const SizedBox(height: 16),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('手动覆盖颜色'),
-                value: _overrideSwatchId != null,
-                onChanged: (on) => setState(() {
-                  _overrideSwatchId = on
-                      ? (_overrideSwatchId ??
-                          farthestSwatchId(
-                            _swatches,
-                            [
-                              for (final t in _tags)
-                                if (_swatchesById[t.swatchId]
-                                    case final swatch?)
-                                  swatch.hue,
-                            ],
-                          ))
-                      : null;
-                }),
+              OverrideArgbRow(
+                overrideArgb: _overrideArgb,
+                tags: _tags,
+                defaults: _defaults,
+                onChanged: (argb) {
+                  if (!mounted) return;
+                  setState(() => _overrideArgb = argb);
+                },
               ),
-              if (_overrideSwatchId != null)
-                SwatchPicker(
-                  swatches: _swatches,
-                  swatchId: _overrideSwatchId!,
-                  onChanged: (id) => setState(() => _overrideSwatchId = id),
-                ),
             ],
           ),
         ),
@@ -469,6 +380,152 @@ class _TaskFormPageState extends State<TaskFormPage> {
       ],
     ),
     ),
+    );
+  }
+}
+
+Task applyFormPaint(
+  Task task, {
+  required String? tagId,
+  required int? overrideArgb,
+}) {
+  return task.copyWith(
+    tagId: tagId,
+    overrideArgb: overrideArgb,
+    clearTag: tagId == null,
+    clearOverrideArgb: overrideArgb == null,
+  );
+}
+
+class TagPickList extends StatelessWidget {
+  const TagPickList({
+    super.key,
+    required this.tags,
+    required this.selectedId,
+    required this.onChanged,
+  });
+
+  final List<Tag> tags;
+  final String? selectedId;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('标签', style: theme.textTheme.titleSmall),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            GestureDetector(
+              onTap: () => onChanged(null),
+              child: Text(
+                '无',
+                style: TextStyle(
+                  fontWeight:
+                      selectedId == null ? FontWeight.w700 : FontWeight.w400,
+                ),
+              ),
+            ),
+            for (final tag in tags)
+              GestureDetector(
+                onTap: () => onChanged(tag.id),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    RectSwatch(
+                      argb: tag.argb,
+                      selected: selectedId == tag.id,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(tag.name),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class OverrideArgbRow extends StatelessWidget {
+  const OverrideArgbRow({
+    super.key,
+    required this.overrideArgb,
+    required this.tags,
+    required this.defaults,
+    required this.onChanged,
+    this.pickArgb,
+  });
+
+  final int? overrideArgb;
+  final List<Tag> tags;
+  final List<DefaultColor> defaults;
+  final ValueChanged<int?> onChanged;
+  final Future<int?> Function(
+    BuildContext context, {
+    required int initialArgb,
+  })? pickArgb;
+
+  List<int> _unionArgbs() {
+    final seen = <int>{};
+    final out = <int>[];
+    for (final t in tags) {
+      if (seen.add(t.argb)) out.add(t.argb);
+    }
+    for (final c in defaults) {
+      if (seen.add(c.argb)) out.add(c.argb);
+    }
+    return out;
+  }
+
+  Future<void> _onEnabled(BuildContext context, bool on) async {
+    if (!on) {
+      onChanged(null);
+      return;
+    }
+    final chips = _unionArgbs();
+    if (chips.isEmpty) {
+      final picker = pickArgb ?? showArgbColorPicker;
+      final picked = await picker(context, initialArgb: kFallbackArgb);
+      onChanged(picked);
+      return;
+    }
+    onChanged(chips.first);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final chips = _unionArgbs();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('手动覆盖颜色'),
+          value: overrideArgb != null,
+          onChanged: (on) => _onEnabled(context, on),
+        ),
+        if (overrideArgb != null)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final argb in chips)
+                RectSwatch(
+                  argb: argb,
+                  selected: argb == overrideArgb,
+                  onTap: () => onChanged(argb),
+                ),
+            ],
+          ),
+      ],
     );
   }
 }

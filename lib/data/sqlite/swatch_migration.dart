@@ -4,7 +4,6 @@ import 'package:uuid/uuid.dart';
 import '../../domain/gantt/argb_color.dart';
 import '../../domain/gantt/color_palette.dart';
 import '../../domain/gantt/factory_swatches.dart';
-import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/models/color_swatch.dart';
 
 const _customSwatchName = '自定义色';
@@ -76,6 +75,113 @@ Future<void> migrateV1toV2(DatabaseExecutor db) async {
 
   await _rebuildTagTable(db);
   await _rebuildTaskTable(db);
+}
+
+/// Migrates schema 2 (shared color_swatch FKs) to schema 3 (tag ARGB + default_color).
+Future<void> migrateV2toV3(DatabaseExecutor db) async {
+  Future<void> body(DatabaseExecutor txn) async {
+    await txn.execute('''
+      CREATE TABLE default_color (
+        id TEXT PRIMARY KEY,
+        argb INTEGER NOT NULL,
+        is_current INTEGER NOT NULL,
+        sort_order INTEGER NOT NULL
+      )
+    ''');
+    final defaults = await txn.query(
+      'color_swatch',
+      where: 'is_default = 1',
+      orderBy: 'sort_order ASC',
+      limit: 1,
+    );
+    final defaultArgb =
+        defaults.isEmpty ? kFallbackArgb : defaults.first['argb'] as int;
+    await txn.insert('default_color', {
+      'id': const Uuid().v4(),
+      'argb': defaultArgb,
+      'is_current': 1,
+      'sort_order': 0,
+    });
+
+    await txn.execute('ALTER TABLE tag ADD COLUMN argb INTEGER');
+    await txn.execute('ALTER TABLE tag ADD COLUMN sort_order INTEGER');
+    await txn.execute('''
+      UPDATE tag SET argb = (
+        SELECT color_swatch.argb FROM color_swatch
+        WHERE color_swatch.id = tag.swatch_id
+      )
+    ''');
+    await txn.execute(
+      'UPDATE tag SET argb = ? WHERE argb IS NULL',
+      [kFallbackArgb],
+    );
+    await txn.execute(
+      'UPDATE tag SET sort_order = rowid WHERE sort_order IS NULL',
+    );
+
+    await txn.execute('''
+      CREATE TABLE tag_new (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        argb INTEGER NOT NULL,
+        sort_order INTEGER NOT NULL
+      )
+    ''');
+    await txn.execute('''
+      INSERT INTO tag_new (id, name, argb, sort_order)
+      SELECT id, name, argb, sort_order FROM tag
+    ''');
+    await txn.execute('DROP TABLE tag');
+    await txn.execute('ALTER TABLE tag_new RENAME TO tag');
+
+    await txn.execute('''
+      CREATE TABLE task_new (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        planned_start INTEGER NOT NULL,
+        planned_end INTEGER NOT NULL,
+        actual_start INTEGER,
+        actual_end INTEGER,
+        is_done INTEGER NOT NULL DEFAULT 0,
+        tag_id TEXT,
+        override_argb INTEGER,
+        notes TEXT,
+        created_at INTEGER NOT NULL
+      )
+    ''');
+    await txn.execute('''
+      INSERT INTO task_new (
+        id, title, planned_start, planned_end, actual_start, actual_end,
+        is_done, tag_id, override_argb, notes, created_at
+      )
+      SELECT
+        t.id, t.title, t.planned_start, t.planned_end, t.actual_start, t.actual_end,
+        t.is_done,
+        CASE
+          WHEN t.primary_tag_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM tag WHERE tag.id = t.primary_tag_id
+          ) THEN t.primary_tag_id
+          ELSE NULL
+        END,
+        (SELECT cs.argb FROM color_swatch cs WHERE cs.id = t.override_swatch_id),
+        t.notes, t.created_at
+      FROM task t
+    ''');
+    await txn.execute('DROP TABLE task');
+    await txn.execute('ALTER TABLE task_new RENAME TO task');
+    await txn.execute(
+        'CREATE INDEX idx_task_planned_start ON task(planned_start)');
+    await txn.execute('CREATE INDEX idx_task_planned_end ON task(planned_end)');
+
+    await txn.execute('DROP TABLE task_tag');
+    await txn.execute('DROP TABLE color_swatch');
+  }
+
+  if (db is Database) {
+    await db.transaction(body);
+  } else {
+    await body(db);
+  }
 }
 
 Future<void> _rebuildTagTable(DatabaseExecutor db) async {
@@ -150,10 +256,14 @@ class _HueToSwatchMigrator {
       kPalettePreviewSaturation,
       kPalettePreviewLightness,
     );
-    final swatch = colorSwatchFromArgb(
+    final hsl = ArgbColor.toHsl(argb);
+    final swatch = ColorSwatch(
       id: id,
       name: _customSwatchName,
       argb: argb,
+      hue: hsl.hue.round() % 360,
+      saturation: hsl.saturation,
+      lightness: hsl.lightness,
       sortOrder: _nextSortOrder++,
     );
     await _insertSwatch(_db, swatch);

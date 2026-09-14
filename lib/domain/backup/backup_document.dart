@@ -1,8 +1,7 @@
 import '../models/app_settings.dart';
-import '../models/color_swatch.dart';
+import '../models/default_color.dart';
 import '../models/tag.dart';
 import '../models/task.dart';
-import '../gantt/swatch_resolve.dart';
 import '../time/wall_clock.dart';
 
 class BackupDocument {
@@ -11,30 +10,25 @@ class BackupDocument {
     required this.exportedAt,
     required this.tasks,
     required this.tags,
+    required this.defaultColors,
     required this.settings,
-    required this.colorSwatches,
   });
 
   final int version;
   final WallMinutes exportedAt;
   final List<Task> tasks;
   final List<Tag> tags;
+  final List<DefaultColor> defaultColors;
   final AppSettings settings;
-  final List<ColorSwatch> colorSwatches;
 
   Map<String, Object?> toJson() => {
         'version': version,
         'exportedAt': exportedAt,
-        'color_swatches': [for (final s in colorSwatches) _swatchToJson(s)],
-        'tasks': [for (final t in tasks) _taskToJson(t)],
-        'tags': [
-          for (final t in tags)
-            {
-              'id': t.id,
-              'name': t.name,
-              'swatch_id': t.swatchId,
-            }
+        'default_colors': [
+          for (final c in defaultColors) _defaultToJson(c),
         ],
+        'tasks': [for (final t in tasks) _taskToJson(t)],
+        'tags': [for (final t in tags) _tagToJson(t)],
         'settings': {
           'visible_start_hour': settings.visibleStartHour,
           'visible_end_hour': settings.visibleEndHour,
@@ -42,31 +36,19 @@ class BackupDocument {
         },
       };
 
-  static Map<String, Object?> _swatchToJson(ColorSwatch s) => {
-        'id': s.id,
-        'name': s.name,
-        'argb': s.argb,
-        'hue': s.hue,
-        'saturation': s.saturation,
-        'lightness': s.lightness,
-        'is_default': s.isDefault,
-        'sort_order': s.sortOrder,
-        'slate': s.slate,
+  static Map<String, Object?> _tagToJson(Tag t) => {
+        'id': t.id,
+        'name': t.name,
+        'argb': t.argb,
+        'sort_order': t.sortOrder,
       };
 
-  static ColorSwatch _swatchFromJson(Map<String, Object?> r) {
-    return ColorSwatch(
-      id: r['id'] as String,
-      name: r['name'] as String,
-      argb: r['argb'] as int,
-      hue: r['hue'] as int,
-      saturation: (r['saturation'] as num).toDouble(),
-      lightness: (r['lightness'] as num).toDouble(),
-      isDefault: r['is_default'] == true || r['is_default'] == 1,
-      sortOrder: r['sort_order'] as int,
-      slate: r['slate'] == true || r['slate'] == 1,
-    );
-  }
+  static Map<String, Object?> _defaultToJson(DefaultColor c) => {
+        'id': c.id,
+        'argb': c.argb,
+        'is_current': c.isCurrent,
+        'sort_order': c.sortOrder,
+      };
 
   static Map<String, Object?> _taskToJson(Task t) => {
         'id': t.id,
@@ -76,9 +58,8 @@ class BackupDocument {
         'actual_start': t.actualStart,
         'actual_end': t.actualEnd,
         'is_done': t.isDone,
-        'primary_tag_id': t.primaryTagId,
-        'auto_swatch_id': t.autoSwatchId,
-        'override_swatch_id': t.overrideSwatchId,
+        'tag_id': t.tagId,
+        'override_argb': t.overrideArgb,
         'notes': t.notes,
         'created_at': t.createdAt,
       };
@@ -95,35 +76,28 @@ class BackupDocument {
     final tasksRaw = json['tasks'];
     final tagsRaw = json['tags'];
     final settingsRaw = json['settings'];
-    if (tasksRaw is! List || tagsRaw is! List || settingsRaw is! Map) {
-      throw const FormatException('missing tasks/tags/settings');
+    final defaultsRaw = json['default_colors'];
+    if (tasksRaw is! List ||
+        tagsRaw is! List ||
+        settingsRaw is! Map ||
+        defaultsRaw is! List) {
+      throw const FormatException('missing tasks/tags/default_colors/settings');
     }
-
-    final swatchesRaw = json['color_swatches'];
-    final swatches = swatchesRaw is List
-        ? [
-            for (final r in swatchesRaw)
-              _swatchFromJson(Map<String, Object?>.from(r as Map))
-          ]
-        : const <ColorSwatch>[];
 
     return BackupDocument(
       version: version,
       exportedAt: exportedAt,
-      colorSwatches: swatches,
+      defaultColors: [
+        for (final r in defaultsRaw)
+          _defaultFromJson(Map<String, Object?>.from(r as Map))
+      ],
       tasks: [
         for (final r in tasksRaw)
-          _taskFromJson(
-            Map<String, Object?>.from(r as Map),
-            version: version,
-          )
+          _taskFromJson(Map<String, Object?>.from(r as Map))
       ],
       tags: [
         for (final r in tagsRaw)
-          _tagFromJson(
-            Map<String, Object?>.from(r as Map),
-            version: version,
-          )
+          _tagFromJson(Map<String, Object?>.from(r as Map))
       ],
       settings: AppSettings(
         visibleStartHour: (settingsRaw['visible_start_hour'] as int?) ?? 8,
@@ -133,69 +107,37 @@ class BackupDocument {
     );
   }
 
-  static Tag _tagFromJson(Map<String, Object?> r, {required int version}) {
-    final swatchId = r['swatch_id'];
-    if (swatchId is String) {
-      return Tag(
-        id: r['id'] as String,
-        name: r['name'] as String,
-        swatchId: swatchId,
-      );
-    }
-    if (version == 1 && r['hue'] is int) {
-      return Tag(
-        id: r['id'] as String,
-        name: r['name'] as String,
-        swatchId: swatchIdForHue(r['hue'] as int),
-      );
-    }
-    throw const FormatException('missing tag swatch_id');
+  static Tag _tagFromJson(Map<String, Object?> r) {
+    return Tag(
+      id: r['id'] as String,
+      name: r['name'] as String,
+      argb: r['argb'] as int,
+      sortOrder: r['sort_order'] as int,
+    );
   }
 
-  static Task _taskFromJson(Map<String, Object?> r, {required int version}) {
-    final autoId = r['auto_swatch_id'];
-    if (autoId is String) {
-      final overrideId = r['override_swatch_id'];
-      return Task(
-        id: r['id'] as String,
-        title: r['title'] as String,
-        plannedStart: r['planned_start'] as int,
-        plannedEnd: r['planned_end'] as int,
-        actualStart: r['actual_start'] as int?,
-        actualEnd: r['actual_end'] as int?,
-        isDone: r['is_done'] == true || r['is_done'] == 1,
-        primaryTagId: r['primary_tag_id'] as String?,
-        autoSwatchId: autoId,
-        overrideSwatchId: overrideId is String ? overrideId : null,
-        notes: r['notes'] as String?,
-        createdAt: r['created_at'] as int,
-      );
-    }
-    if (version == 1 && r['auto_hue'] is int) {
-      return Task(
-        id: r['id'] as String,
-        title: r['title'] as String,
-        plannedStart: r['planned_start'] as int,
-        plannedEnd: r['planned_end'] as int,
-        actualStart: r['actual_start'] as int?,
-        actualEnd: r['actual_end'] as int?,
-        isDone: r['is_done'] == true || r['is_done'] == 1,
-        primaryTagId: r['primary_tag_id'] as String?,
-        autoSwatchId: swatchIdForHue(r['auto_hue'] as int),
-        overrideSwatchId: r['override_hue'] != null
-            ? swatchIdForHue(r['override_hue'] as int)
-            : null,
-        notes: r['notes'] as String?,
-        createdAt: r['created_at'] as int,
-      );
-    }
-    throw const FormatException('missing task auto_swatch_id');
+  static DefaultColor _defaultFromJson(Map<String, Object?> r) {
+    return DefaultColor(
+      id: r['id'] as String,
+      argb: r['argb'] as int,
+      sortOrder: r['sort_order'] as int,
+      isCurrent: r['is_current'] == true || r['is_current'] == 1,
+    );
   }
-}
 
-/// Per-task tag ids carried alongside the backup for import.
-class BackupTaskTags {
-  const BackupTaskTags(this.taskId, this.tagIds);
-  final String taskId;
-  final List<String> tagIds;
+  static Task _taskFromJson(Map<String, Object?> r) {
+    return Task(
+      id: r['id'] as String,
+      title: r['title'] as String,
+      plannedStart: r['planned_start'] as int,
+      plannedEnd: r['planned_end'] as int,
+      actualStart: r['actual_start'] as int?,
+      actualEnd: r['actual_end'] as int?,
+      isDone: r['is_done'] == true || r['is_done'] == 1,
+      tagId: r['tag_id'] as String?,
+      overrideArgb: r['override_argb'] as int?,
+      notes: r['notes'] as String?,
+      createdAt: r['created_at'] as int,
+    );
+  }
 }

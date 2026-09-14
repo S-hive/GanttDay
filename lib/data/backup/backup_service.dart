@@ -3,12 +3,13 @@ import 'dart:convert';
 import 'package:sqflite_common/sqlite_api.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../domain/backup/backup_document.dart';
 import '../../domain/gantt/argb_color.dart';
 import '../../domain/gantt/color_palette.dart';
 import '../../domain/gantt/factory_swatches.dart';
-import '../../domain/gantt/swatch_resolve.dart';
 import '../../domain/models/app_settings.dart';
 import '../../domain/models/color_swatch.dart';
+import '../../domain/models/default_color.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
@@ -43,54 +44,22 @@ class BackupService {
   final TaskRepository tasks;
   final SettingsStore settings;
 
-  static const int supportedVersion = 2;
+  static const int supportedVersion = 3;
 
   Future<String> exportJson() async {
     final allTasks = await tasks.watchTasksOverlapping(0, 1 << 30).first;
     final tags = await tasks.listTags();
-    final swatches = await tasks.listSwatches();
+    final defaults = await tasks.listDefaultColors();
     final appSettings = await settings.read();
-
-    final tasksJson = <Map<String, Object?>>[];
-    for (final t in allTasks) {
-      final tagIds = await tasks.tagIdsForTask(t.id);
-      tasksJson.add({
-        'id': t.id,
-        'title': t.title,
-        'planned_start': t.plannedStart,
-        'planned_end': t.plannedEnd,
-        'actual_start': t.actualStart,
-        'actual_end': t.actualEnd,
-        'is_done': t.isDone,
-        'primary_tag_id': t.primaryTagId,
-        'auto_swatch_id': t.autoSwatchId,
-        'override_swatch_id': t.overrideSwatchId,
-        'notes': t.notes,
-        'created_at': t.createdAt,
-        'tag_ids': tagIds,
-      });
-    }
-
-    final doc = {
-      'version': supportedVersion,
-      'exportedAt': WallClock.now(),
-      'color_swatches': [for (final s in swatches) _swatchToJson(s)],
-      'tasks': tasksJson,
-      'tags': [
-        for (final t in tags)
-          {
-            'id': t.id,
-            'name': t.name,
-            'swatch_id': t.swatchId,
-          }
-      ],
-      'settings': {
-        'visible_start_hour': appSettings.visibleStartHour,
-        'visible_end_hour': appSettings.visibleEndHour,
-        'urgency_window_days': appSettings.urgencyWindowDays,
-      },
-    };
-    return const JsonEncoder.withIndent('  ').convert(doc);
+    final doc = BackupDocument(
+      version: supportedVersion,
+      exportedAt: WallClock.now(),
+      tasks: allTasks,
+      tags: tags,
+      defaultColors: defaults,
+      settings: appSettings,
+    );
+    return const JsonEncoder.withIndent('  ').convert(doc.toJson());
   }
 
   Future<BackupImportResult> importJson(String text) async {
@@ -102,8 +71,8 @@ class BackupService {
     final problems = <String>[];
 
     final version = map['version'];
-    if (version is! int || (version != 1 && version != supportedVersion)) {
-      problems.add('不支持的版本号: $version（需要 1 或 $supportedVersion）');
+    if (version is! int || (version != 1 && version != 2 && version != 3)) {
+      problems.add('不支持的版本号: $version（需要 1、2 或 $supportedVersion）');
     }
 
     final tasksRaw = map['tasks'];
@@ -117,18 +86,82 @@ class BackupService {
       throw BackupValidationException(problems);
     }
 
+    final settingsMap = Map<String, Object?>.from(settingsRaw as Map);
     if (version == 1) {
-      return _importV1(
-        tasksRaw as List,
-        tagsRaw as List,
-        Map<String, Object?>.from(settingsRaw as Map),
-      );
+      return _importV1(tasksRaw as List, tagsRaw as List, settingsMap);
     }
-    return _importV2(
-      map,
-      tasksRaw as List,
-      tagsRaw as List,
-      Map<String, Object?>.from(settingsRaw as Map),
+    if (version == 2) {
+      return _importV2(map, tasksRaw as List, tagsRaw as List, settingsMap);
+    }
+    return _importV3(map, tasksRaw as List, tagsRaw as List, settingsMap);
+  }
+
+  Future<BackupImportResult> _importV3(
+    Map<String, Object?> map,
+    List tasksRaw,
+    List tagsRaw,
+    Map<String, Object?> settingsRaw,
+  ) async {
+    final problems = <String>[];
+    final defaultsRaw = map['default_colors'];
+    if (defaultsRaw is! List) {
+      problems.add('缺少 default_colors 数组');
+    }
+
+    final parsedDefaults = <DefaultColor>[];
+    if (defaultsRaw is List) {
+      for (var i = 0; i < defaultsRaw.length; i++) {
+        final row = defaultsRaw[i];
+        if (row is! Map) {
+          problems.add('default_colors[$i] 不是对象');
+          continue;
+        }
+        final c = _parseDefaultColor(Map<String, Object?>.from(row), i, problems);
+        if (c != null) parsedDefaults.add(c);
+      }
+    }
+
+    final parsedTags = <Tag>[];
+    final tagIds = <String>{};
+    for (var i = 0; i < tagsRaw.length; i++) {
+      final row = tagsRaw[i];
+      if (row is! Map) {
+        problems.add('tags[$i] 不是对象');
+        continue;
+      }
+      final tag = _parseTagV3(Map<String, Object?>.from(row), i, problems);
+      if (tag != null) {
+        parsedTags.add(tag);
+        tagIds.add(tag.id);
+      }
+    }
+
+    final parsedTasks = <Task>[];
+    for (var i = 0; i < tasksRaw.length; i++) {
+      final row = tasksRaw[i];
+      if (row is! Map) {
+        problems.add('tasks[$i] 不是对象');
+        continue;
+      }
+      final task = _parseTaskV3(
+        Map<String, Object?>.from(row),
+        i,
+        tagIds,
+        problems,
+      );
+      if (task != null) parsedTasks.add(task);
+    }
+
+    final parsedSettings = _parseSettings(settingsRaw, problems);
+    if (problems.isNotEmpty) {
+      throw BackupValidationException(problems);
+    }
+
+    return _writeImport(
+      tags: parsedTags,
+      defaultColors: parsedDefaults,
+      tasks: parsedTasks,
+      settings: parsedSettings!,
     );
   }
 
@@ -139,7 +172,6 @@ class BackupService {
     Map<String, Object?> settingsRaw,
   ) async {
     final problems = <String>[];
-
     final swatchesRaw = map['color_swatches'];
     if (swatchesRaw is! List) {
       problems.add('缺少 color_swatches 数组');
@@ -157,27 +189,7 @@ class BackupService {
         if (s != null) parsedSwatches.add(s);
       }
     }
-
-    final swatchIds = {for (final s in parsedSwatches) s.id};
-
-    final parsedTasks = <Task>[];
-    final taskTagIds = <String, List<String>>{};
-    for (var i = 0; i < tasksRaw.length; i++) {
-      final row = tasksRaw[i];
-      if (row is! Map) {
-        problems.add('tasks[$i] 不是对象');
-        continue;
-      }
-      final m = Map<String, Object?>.from(row);
-      final task = _parseTaskV2(m, i, swatchIds, problems);
-      if (task != null) {
-        parsedTasks.add(task);
-        final ids = m['tag_ids'];
-        if (ids is List) {
-          taskTagIds[task.id] = [for (final x in ids) '$x'];
-        }
-      }
-    }
+    final swatchById = {for (final s in parsedSwatches) s.id: s};
 
     final parsedTags = <Tag>[];
     for (var i = 0; i < tagsRaw.length; i++) {
@@ -186,22 +198,42 @@ class BackupService {
         problems.add('tags[$i] 不是对象');
         continue;
       }
-      final m = Map<String, Object?>.from(row);
-      final tag = _parseTagV2(m, i, swatchIds, problems);
+      final tag = _parseTagV2(
+        Map<String, Object?>.from(row),
+        i,
+        swatchById,
+        problems,
+      );
       if (tag != null) parsedTags.add(tag);
+    }
+    final tagIds = {for (final t in parsedTags) t.id};
+
+    final parsedTasks = <Task>[];
+    for (var i = 0; i < tasksRaw.length; i++) {
+      final row = tasksRaw[i];
+      if (row is! Map) {
+        problems.add('tasks[$i] 不是对象');
+        continue;
+      }
+      final task = _parseTaskV2(
+        Map<String, Object?>.from(row),
+        i,
+        swatchById,
+        tagIds,
+        problems,
+      );
+      if (task != null) parsedTasks.add(task);
     }
 
     final parsedSettings = _parseSettings(settingsRaw, problems);
-
     if (problems.isNotEmpty) {
       throw BackupValidationException(problems);
     }
 
     return _writeImport(
-      swatches: parsedSwatches,
       tags: parsedTags,
+      defaultColors: _defaultsFromSwatches(parsedSwatches),
       tasks: parsedTasks,
-      taskTagIds: taskTagIds,
       settings: parsedSettings!,
     );
   }
@@ -212,7 +244,6 @@ class BackupService {
     Map<String, Object?> settingsRaw,
   ) async {
     final problems = <String>[];
-
     final parsedSettings = _parseSettings(settingsRaw, problems);
     final resolver = _HueToSwatchResolver();
 
@@ -223,67 +254,90 @@ class BackupService {
         problems.add('tags[$i] 不是对象');
         continue;
       }
-      final tag = _parseTagV1(Map<String, Object?>.from(row), i, resolver, problems);
+      final tag = _parseTagV1(
+        Map<String, Object?>.from(row),
+        i,
+        resolver,
+        problems,
+      );
       if (tag != null) parsedTags.add(tag);
     }
+    final tagIds = {for (final t in parsedTags) t.id};
 
     final parsedTasks = <Task>[];
-    final taskTagIds = <String, List<String>>{};
     for (var i = 0; i < tasksRaw.length; i++) {
       final row = tasksRaw[i];
       if (row is! Map) {
         problems.add('tasks[$i] 不是对象');
         continue;
       }
-      final m = Map<String, Object?>.from(row);
-      final task = _parseTaskV1(m, i, resolver, problems);
-      if (task != null) {
-        parsedTasks.add(task);
-        final ids = m['tag_ids'];
-        if (ids is List) {
-          taskTagIds[task.id] = [for (final x in ids) '$x'];
-        }
-      }
+      final task = _parseTaskV1(
+        Map<String, Object?>.from(row),
+        i,
+        resolver,
+        tagIds,
+        problems,
+      );
+      if (task != null) parsedTasks.add(task);
     }
 
     if (problems.isNotEmpty) {
       throw BackupValidationException(problems);
     }
 
+    final factoryDefault = kFactoryColorSwatches.firstWhere((s) => s.isDefault);
     return _writeImport(
-      swatches: resolver.customSwatches,
       tags: parsedTags,
-      tasks: parsedTasks,
-      taskTagIds: taskTagIds,
+      defaultColors: [
+        DefaultColor(
+          id: const Uuid().v4(),
+          argb: factoryDefault.argb,
+          sortOrder: 0,
+          isCurrent: true,
+        ),
+      ],
       settings: parsedSettings!,
-      ensureFactorySwatches: true,
+      tasks: parsedTasks,
     );
   }
 
+  List<DefaultColor> _defaultsFromSwatches(List<ColorSwatch> swatches) {
+    final defaults = [
+      for (final s in swatches)
+        if (s.isDefault) s,
+    ]..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    if (defaults.isEmpty) {
+      return [
+        DefaultColor(
+          id: const Uuid().v4(),
+          argb: kFallbackArgb,
+          sortOrder: 0,
+          isCurrent: true,
+        ),
+      ];
+    }
+    return [
+      for (var i = 0; i < defaults.length; i++)
+        DefaultColor(
+          id: const Uuid().v4(),
+          argb: defaults[i].argb,
+          sortOrder: i,
+          isCurrent: i == 0,
+        ),
+    ];
+  }
+
   Future<BackupImportResult> _writeImport({
-    required List<ColorSwatch> swatches,
     required List<Tag> tags,
+    required List<DefaultColor> defaultColors,
     required List<Task> tasks,
-    required Map<String, List<String>> taskTagIds,
     required AppSettings settings,
-    bool ensureFactorySwatches = false,
   }) async {
     var importedTasks = 0;
     var importedTags = 0;
     var skipped = 0;
 
     await db.transaction((txn) async {
-      if (ensureFactorySwatches) {
-        await _ensureFactorySwatches(txn);
-      }
-      for (final swatch in swatches) {
-        await txn.insert(
-          'color_swatch',
-          _rowFromSwatch(swatch),
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
-      }
-
       for (final tag in tags) {
         final existing = await txn.query(
           'tag',
@@ -294,10 +348,21 @@ class BackupService {
           await txn.insert('tag', {
             'id': tag.id,
             'name': tag.name,
-            'swatch_id': tag.swatchId,
+            'argb': tag.argb,
+            'sort_order': tag.sortOrder,
           });
           importedTags++;
         }
+      }
+
+      await txn.delete('default_color');
+      for (final color in defaultColors) {
+        await txn.insert('default_color', {
+          'id': color.id,
+          'argb': color.argb,
+          'is_current': color.isCurrent ? 1 : 0,
+          'sort_order': color.sortOrder,
+        });
       }
 
       for (final task in tasks) {
@@ -318,18 +383,11 @@ class BackupService {
           'actual_start': task.actualStart,
           'actual_end': task.actualEnd,
           'is_done': task.isDone ? 1 : 0,
-          'primary_tag_id': task.primaryTagId,
-          'auto_swatch_id': task.autoSwatchId,
-          'override_swatch_id': task.overrideSwatchId,
+          'tag_id': task.tagId,
+          'override_argb': task.overrideArgb,
           'notes': task.notes,
           'created_at': task.createdAt,
         });
-        for (final tagId in taskTagIds[task.id] ?? const <String>[]) {
-          await txn.insert('task_tag', {
-            'task_id': task.id,
-            'tag_id': tagId,
-          });
-        }
         importedTasks++;
       }
 
@@ -367,6 +425,93 @@ class BackupService {
       visibleStartHour: start,
       visibleEndHour: end,
       urgencyWindowDays: days,
+    );
+  }
+
+  DefaultColor? _parseDefaultColor(
+    Map<String, Object?> m,
+    int i,
+    List<String> problems,
+  ) {
+    final id = m['id'];
+    final argb = m['argb'];
+    final sortOrder = m['sort_order'];
+    if (id is! String || id.isEmpty) {
+      problems.add('default_colors[$i]: 缺少 id');
+      return null;
+    }
+    if (argb is! int || sortOrder is! int) {
+      problems.add('default_colors[$i]: 字段类型非法');
+      return null;
+    }
+    return DefaultColor(
+      id: id,
+      argb: argb,
+      sortOrder: sortOrder,
+      isCurrent: m['is_current'] == true || m['is_current'] == 1,
+    );
+  }
+
+  Tag? _parseTagV3(
+    Map<String, Object?> m,
+    int i,
+    List<String> problems,
+  ) {
+    final id = m['id'];
+    final name = m['name'];
+    final argb = m['argb'];
+    final sortOrder = m['sort_order'];
+    if (id is! String || id.isEmpty) {
+      problems.add('tags[$i]: 缺少 id');
+      return null;
+    }
+    if (name is! String || name.isEmpty) {
+      problems.add('tags[$i]: 缺少 name');
+      return null;
+    }
+    if (argb is! int || sortOrder is! int) {
+      problems.add('tags[$i]: 字段类型非法');
+      return null;
+    }
+    return Tag(id: id, name: name, argb: argb, sortOrder: sortOrder);
+  }
+
+  Task? _parseTaskV3(
+    Map<String, Object?> m,
+    int i,
+    Set<String> tagIds,
+    List<String> problems,
+  ) {
+    final core = _parseTaskCore(m, i, problems);
+    if (core == null) return null;
+    final tagId = m['tag_id'];
+    if (tagId != null) {
+      if (tagId is! String || tagId.isEmpty) {
+        problems.add('tasks[$i]: tag_id 非法');
+        return null;
+      }
+      if (!tagIds.contains(tagId)) {
+        problems.add('tasks[$i]: tag_id 不存在: $tagId');
+        return null;
+      }
+    }
+    final overrideArgb = m['override_argb'];
+    if (overrideArgb != null && overrideArgb is! int) {
+      problems.add('tasks[$i]: override_argb 非法');
+      return null;
+    }
+    return Task(
+      id: core.id,
+      title: core.title,
+      plannedStart: core.plannedStart,
+      plannedEnd: core.plannedEnd,
+      actualStart: core.actualStart,
+      actualEnd: core.actualEnd,
+      isDone: core.isDone,
+      tagId: tagId as String?,
+      overrideArgb: overrideArgb as int?,
+      notes: core.notes,
+      createdAt: core.createdAt,
     );
   }
 
@@ -414,7 +559,7 @@ class BackupService {
   Tag? _parseTagV2(
     Map<String, Object?> m,
     int i,
-    Set<String> swatchIds,
+    Map<String, ColorSwatch> swatchById,
     List<String> problems,
   ) {
     final id = m['id'];
@@ -432,77 +577,68 @@ class BackupService {
       problems.add('tags[$i]: 缺少 swatch_id');
       return null;
     }
-    if (!swatchIds.contains(swatchId)) {
+    final swatch = swatchById[swatchId];
+    if (swatch == null) {
       problems.add('tags[$i]: swatch_id 不存在: $swatchId');
       return null;
     }
-    return Tag(id: id, name: name, swatchId: swatchId);
+    return Tag(
+      id: id,
+      name: name,
+      argb: swatch.argb,
+      sortOrder: i,
+    );
   }
 
   Task? _parseTaskV2(
     Map<String, Object?> m,
     int i,
-    Set<String> swatchIds,
+    Map<String, ColorSwatch> swatchById,
+    Set<String> tagIds,
     List<String> problems,
   ) {
-    final id = m['id'];
-    final title = m['title'];
-    final start = m['planned_start'];
-    final end = m['planned_end'];
+    final core = _parseTaskCore(m, i, problems);
+    if (core == null) return null;
     final autoSwatchId = m['auto_swatch_id'];
-    final createdAt = m['created_at'];
-    if (id is! String || id.isEmpty) {
-      problems.add('tasks[$i]: 缺少 id');
-      return null;
-    }
-    if (title is! String || title.isEmpty) {
-      problems.add('tasks[$i]: 缺少 title');
-      return null;
-    }
-    if (start is! int || end is! int) {
-      problems.add('tasks[$i]: 计划时间非法');
-      return null;
-    }
-    if (end <= start) {
-      problems.add('tasks[$i]: 结束时间不晚于开始时间');
-      return null;
-    }
     if (autoSwatchId is! String || autoSwatchId.isEmpty) {
       problems.add('tasks[$i]: 缺少 auto_swatch_id');
       return null;
     }
-    if (!swatchIds.contains(autoSwatchId)) {
+    if (!swatchById.containsKey(autoSwatchId)) {
       problems.add('tasks[$i]: auto_swatch_id 不存在: $autoSwatchId');
       return null;
     }
     final overrideId = m['override_swatch_id'];
+    int? overrideArgb;
     if (overrideId != null) {
       if (overrideId is! String || overrideId.isEmpty) {
         problems.add('tasks[$i]: override_swatch_id 非法');
         return null;
       }
-      if (!swatchIds.contains(overrideId)) {
+      final override = swatchById[overrideId];
+      if (override == null) {
         problems.add('tasks[$i]: override_swatch_id 不存在: $overrideId');
         return null;
       }
+      overrideArgb = override.argb;
     }
-    if (createdAt is! int) {
-      problems.add('tasks[$i]: created_at 非法');
-      return null;
+    final primary = m['primary_tag_id'];
+    String? tagId;
+    if (primary is String && tagIds.contains(primary)) {
+      tagId = primary;
     }
     return Task(
-      id: id,
-      title: title,
-      plannedStart: start,
-      plannedEnd: end,
-      actualStart: m['actual_start'] as int?,
-      actualEnd: m['actual_end'] as int?,
-      isDone: m['is_done'] == true || m['is_done'] == 1,
-      primaryTagId: m['primary_tag_id'] as String?,
-      autoSwatchId: autoSwatchId,
-      overrideSwatchId: overrideId as String?,
-      notes: m['notes'] as String?,
-      createdAt: createdAt,
+      id: core.id,
+      title: core.title,
+      plannedStart: core.plannedStart,
+      plannedEnd: core.plannedEnd,
+      actualStart: core.actualStart,
+      actualEnd: core.actualEnd,
+      isDone: core.isDone,
+      tagId: tagId,
+      overrideArgb: overrideArgb,
+      notes: core.notes,
+      createdAt: core.createdAt,
     );
   }
 
@@ -527,20 +663,64 @@ class BackupService {
       problems.add('tags[$i]: 缺少 hue');
       return null;
     }
-    return Tag(id: id, name: name, swatchId: resolver.resolve(hue));
+    final swatch = resolver.resolve(hue);
+    return Tag(id: id, name: name, argb: swatch.argb, sortOrder: i);
   }
 
   Task? _parseTaskV1(
     Map<String, Object?> m,
     int i,
     _HueToSwatchResolver resolver,
+    Set<String> tagIds,
+    List<String> problems,
+  ) {
+    final core = _parseTaskCore(m, i, problems);
+    if (core == null) return null;
+    final autoHue = m['auto_hue'];
+    final createdAt = m['created_at'];
+    if (autoHue is! int || createdAt is! int) {
+      problems.add('tasks[$i]: auto_hue / created_at 非法');
+      return null;
+    }
+    resolver.resolve(autoHue);
+    final overrideHue = m['override_hue'];
+    int? overrideArgb;
+    if (overrideHue != null) {
+      if (overrideHue is! int) {
+        problems.add('tasks[$i]: override_hue 非法');
+        return null;
+      }
+      overrideArgb = resolver.resolve(overrideHue).argb;
+    }
+    final primary = m['primary_tag_id'];
+    String? tagId;
+    if (primary is String && tagIds.contains(primary)) {
+      tagId = primary;
+    }
+    return Task(
+      id: core.id,
+      title: core.title,
+      plannedStart: core.plannedStart,
+      plannedEnd: core.plannedEnd,
+      actualStart: core.actualStart,
+      actualEnd: core.actualEnd,
+      isDone: core.isDone,
+      tagId: tagId,
+      overrideArgb: overrideArgb,
+      notes: core.notes,
+      createdAt: createdAt,
+    );
+  }
+
+  _TaskCore? _parseTaskCore(
+    Map<String, Object?> m,
+    int i,
     List<String> problems,
   ) {
     final id = m['id'];
     final title = m['title'];
     final start = m['planned_start'];
     final end = m['planned_end'];
-    final autoHue = m['auto_hue'];
     final createdAt = m['created_at'];
     if (id is! String || id.isEmpty) {
       problems.add('tasks[$i]: 缺少 id');
@@ -558,15 +738,11 @@ class BackupService {
       problems.add('tasks[$i]: 结束时间不晚于开始时间');
       return null;
     }
-    if (autoHue is! int || createdAt is! int) {
-      problems.add('tasks[$i]: auto_hue / created_at 非法');
+    if (createdAt is! int) {
+      problems.add('tasks[$i]: created_at 非法');
       return null;
     }
-    final autoSwatchId = resolver.resolve(autoHue);
-    final overrideHue = m['override_hue'];
-    final overrideSwatchId =
-        overrideHue != null ? resolver.resolve(overrideHue as int) : null;
-    return Task(
+    return _TaskCore(
       id: id,
       title: title,
       plannedStart: start,
@@ -574,9 +750,6 @@ class BackupService {
       actualStart: m['actual_start'] as int?,
       actualEnd: m['actual_end'] as int?,
       isDone: m['is_done'] == true || m['is_done'] == 1,
-      primaryTagId: m['primary_tag_id'] as String?,
-      autoSwatchId: autoSwatchId,
-      overrideSwatchId: overrideSwatchId,
       notes: m['notes'] as String?,
       createdAt: createdAt,
     );
@@ -592,40 +765,30 @@ class BackupService {
     await put('visible_end_hour', s.visibleEndHour);
     await put('urgency_window_days', s.urgencyWindowDays);
   }
+}
 
-  Future<void> _ensureFactorySwatches(DatabaseExecutor txn) async {
-    for (final s in kFactoryColorSwatches) {
-      await txn.insert(
-        'color_swatch',
-        _rowFromSwatch(s),
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
-    }
-  }
+class _TaskCore {
+  const _TaskCore({
+    required this.id,
+    required this.title,
+    required this.plannedStart,
+    required this.plannedEnd,
+    required this.actualStart,
+    required this.actualEnd,
+    required this.isDone,
+    required this.notes,
+    required this.createdAt,
+  });
 
-  static Map<String, Object?> _swatchToJson(ColorSwatch s) => {
-        'id': s.id,
-        'name': s.name,
-        'argb': s.argb,
-        'hue': s.hue,
-        'saturation': s.saturation,
-        'lightness': s.lightness,
-        'is_default': s.isDefault,
-        'sort_order': s.sortOrder,
-        'slate': s.slate,
-      };
-
-  static Map<String, Object?> _rowFromSwatch(ColorSwatch s) => {
-        'id': s.id,
-        'name': s.name,
-        'argb': s.argb,
-        'hue': s.hue,
-        'saturation': s.saturation,
-        'lightness': s.lightness,
-        'is_default': s.isDefault ? 1 : 0,
-        'sort_order': s.sortOrder,
-        'slate': s.slate ? 1 : 0,
-      };
+  final String id;
+  final String title;
+  final int plannedStart;
+  final int plannedEnd;
+  final int? actualStart;
+  final int? actualEnd;
+  final bool isDone;
+  final String? notes;
+  final int createdAt;
 }
 
 const _customSwatchName = '自定义色';
@@ -633,35 +796,34 @@ const _customSwatchName = '自定义色';
 class _HueToSwatchResolver {
   _HueToSwatchResolver() {
     for (final s in kFactoryColorSwatches) {
-      _hueToId[s.hue] = s.id;
+      _hueToSwatch[s.hue] = s;
     }
   }
 
   final _uuid = const Uuid();
-  final Map<int, String> _hueToId = {};
-  final Map<int, ColorSwatch> _customByHue = {};
+  final Map<int, ColorSwatch> _hueToSwatch = {};
   var _nextSortOrder = kFactoryColorSwatches.length;
 
-  List<ColorSwatch> get customSwatches => _customByHue.values.toList();
-
-  String resolve(int hue) {
-    final cached = _hueToId[hue];
+  ColorSwatch resolve(int hue) {
+    final cached = _hueToSwatch[hue];
     if (cached != null) return cached;
 
-    final id = _uuid.v4();
     final argb = ArgbColor.fromHsl(
       hue.toDouble(),
       kPalettePreviewSaturation,
       kPalettePreviewLightness,
     );
-    final swatch = colorSwatchFromArgb(
-      id: id,
+    final hsl = ArgbColor.toHsl(argb);
+    final swatch = ColorSwatch(
+      id: _uuid.v4(),
       name: _customSwatchName,
       argb: argb,
+      hue: hsl.hue.round() % 360,
+      saturation: hsl.saturation,
+      lightness: hsl.lightness,
       sortOrder: _nextSortOrder++,
     );
-    _hueToId[hue] = id;
-    _customByHue[hue] = swatch;
-    return id;
+    _hueToSwatch[hue] = swatch;
+    return swatch;
   }
 }

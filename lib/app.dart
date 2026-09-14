@@ -1,10 +1,10 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart' hide ColorSwatch;
+import 'package:flutter/material.dart';
 import 'package:sqflite_common/sqlite_api.dart';
 
-import 'domain/gantt/factory_swatches.dart';
-import 'domain/models/color_swatch.dart';
+import 'domain/models/default_color.dart';
+import 'domain/theme_seed.dart';
 import 'platform/file_gateway.dart';
 import 'platform/settings_store.dart';
 import 'platform/task_repository.dart';
@@ -26,16 +26,6 @@ class AppServices {
   final FileGateway files;
 }
 
-/// Theme seed from settings default swatch (ARGB). Falls back to factory azure.
-Color themeSeedFromSwatches(Iterable<ColorSwatch> swatches) {
-  for (final s in swatches) {
-    if (s.isDefault) return Color(s.argb);
-  }
-  if (swatches.isNotEmpty) return Color(swatches.first.argb);
-  final factory = kFactoryColorSwatches.firstWhere((s) => s.isDefault);
-  return Color(factory.argb);
-}
-
 class GanttDayApp extends StatefulWidget {
   const GanttDayApp({super.key, required this.services});
 
@@ -46,14 +36,15 @@ class GanttDayApp extends StatefulWidget {
 }
 
 class _GanttDayAppState extends State<GanttDayApp> {
-  StreamSubscription<List<ColorSwatch>>? _swatchesSub;
-  Color _seedColor = themeSeedFromSwatches(kFactoryColorSwatches);
+  StreamSubscription<List<DefaultColor>>? _defaultsSub;
+  Color _seedColor = Color(themeSeedFromDefaultColors(const []));
 
   @override
   void initState() {
     super.initState();
-    _swatchesSub = widget.services.tasks.watchSwatches().listen((swatches) {
-      final next = themeSeedFromSwatches(swatches);
+    _defaultsSub =
+        widget.services.tasks.watchDefaultColors().listen((colors) {
+      final next = Color(themeSeedFromDefaultColors(colors));
       if (!mounted || next.toARGB32() == _seedColor.toARGB32()) return;
       setState(() => _seedColor = next);
     });
@@ -61,7 +52,7 @@ class _GanttDayAppState extends State<GanttDayApp> {
 
   @override
   void dispose() {
-    _swatchesSub?.cancel();
+    _defaultsSub?.cancel();
     super.dispose();
   }
 

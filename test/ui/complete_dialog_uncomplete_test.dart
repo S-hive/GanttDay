@@ -21,7 +21,6 @@ Task _doneTask() => Task(
       actualStart: 12 * 60 + 45,
       actualEnd: 13 * 60,
       isDone: true,
-      autoSwatchId: 'azure',
       createdAt: 0,
     );
 

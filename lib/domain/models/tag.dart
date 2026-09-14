@@ -1,7 +1,13 @@
 class Tag {
-  const Tag({required this.id, required this.name, required this.swatchId});
+  const Tag({
+    required this.id,
+    required this.name,
+    required this.argb,
+    required this.sortOrder,
+  });
 
   final String id;
   final String name;
-  final String swatchId;
+  final int argb;
+  final int sortOrder;
 }

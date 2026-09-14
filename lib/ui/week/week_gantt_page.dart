@@ -1,14 +1,14 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart' hide ColorSwatch;
+import 'package:flutter/material.dart';
 
 import '../../app.dart';
-import '../../domain/gantt/factory_swatches.dart';
-import '../../domain/gantt/swatch_resolve.dart';
+import '../../domain/gantt/argb_color.dart';
+import '../../domain/gantt/paint_resolve.dart';
 import '../../domain/gantt/tag_filter.dart';
 import '../../domain/gantt/urgency_palette.dart';
 import '../../domain/models/app_settings.dart';
-import '../../domain/models/color_swatch.dart';
+import '../../domain/models/default_color.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
@@ -63,7 +63,7 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   }
 
   StreamSubscription<List<Task>>? _tasksSub;
-  StreamSubscription<List<ColorSwatch>>? _swatchesSub;
+  StreamSubscription<List<DefaultColor>>? _defaultsSub;
   StreamSubscription<AppSettings>? _settingsSub;
   final ScrollController _vScroll = ScrollController();
   bool _didInitialScroll = false;
@@ -71,8 +71,7 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
 
   List<Task> _tasks = const [];
   Map<String, Tag> _tags = const {};
-  Map<String, List<String>> _taskTagIds = const {};
-  Map<String, ColorSwatch> _swatchesById = const {};
+  int? _currentDefaultArgb;
   AppSettings _settings = const AppSettings();
 
   DateTime get _weekStart {
@@ -88,11 +87,17 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   void initState() {
     super.initState();
     _subscribe();
-    _swatchesSub = widget.services.tasks.watchSwatches().listen((swatches) {
+    _defaultsSub =
+        widget.services.tasks.watchDefaultColors().listen((colors) {
       if (!mounted) return;
-      setState(() {
-        _swatchesById = {for (final s in swatches) s.id: s};
-      });
+      int? current;
+      for (final c in colors) {
+        if (c.isCurrent) {
+          current = c.argb;
+          break;
+        }
+      }
+      setState(() => _currentDefaultArgb = current);
     });
     _settingsSub = widget.services.settings.watch().listen((s) {
       if (mounted) setState(() => _settings = s);
@@ -118,15 +123,10 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
         .listen((tasks) async {
       final epoch = ++_tasksLoadEpoch;
       final tags = await widget.services.tasks.listTags();
-      final tagIds = <String, List<String>>{};
-      for (final t in tasks) {
-        tagIds[t.id] = await widget.services.tasks.tagIdsForTask(t.id);
-      }
       if (!mounted || epoch != _tasksLoadEpoch) return;
       setState(() {
         _tasks = tasks;
         _tags = {for (final t in tags) t.id: t};
-        _taskTagIds = tagIds;
       });
     });
   }
@@ -134,7 +134,7 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
   @override
   void dispose() {
     _tasksSub?.cancel();
-    _swatchesSub?.cancel();
+    _defaultsSub?.cancel();
     _settingsSub?.cancel();
     _vScroll.dispose();
     super.dispose();
@@ -144,26 +144,24 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
     return _tasks
         .where(
           (t) => taskMatchesTagFilter(
-            primaryTagId: t.primaryTagId,
-            attachedTagIds: _taskTagIds[t.id] ?? const <String>[],
+            tagId: t.tagId,
             filterTagIds: widget.filterTagIds,
           ),
         )
         .toList();
   }
 
-  ColorSwatch get _defaultSwatch =>
-      _swatchesById[kDefaultSwatchId] ??
-      kFactoryColorSwatches.firstWhere((s) => s.isDefault);
-
-  /// Same as month: base swatch color; overdue unfinished → gray.
   BarPaint _paintFor(Task task) {
-    final id = resolveTaskSwatchId(task, _tags);
-    final base = _swatchesById[id] ?? _defaultSwatch;
+    final argb = resolveTaskArgb(
+      task,
+      _tags,
+      currentDefaultArgb: _currentDefaultArgb,
+    );
+    final hsl = ArgbColor.toHsl(argb);
     final overdue = !task.isDone && task.plannedEnd < WallClock.now();
     if (overdue) {
       return BarPaint(
-        hue: base.hue,
+        hue: hsl.hue.round() % 360,
         saturation: 0.12,
         lightness: 0.55,
         hatchOverdue: false,
@@ -171,9 +169,9 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
       );
     }
     return BarPaint(
-      hue: base.hue,
-      saturation: base.saturation,
-      lightness: base.lightness,
+      hue: hsl.hue.round() % 360,
+      saturation: hsl.saturation,
+      lightness: hsl.lightness,
       hatchOverdue: false,
       isPlannedGray: false,
     );

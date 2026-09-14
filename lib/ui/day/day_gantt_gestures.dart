@@ -24,6 +24,7 @@ enum _DragMode { none, create, move, resizeStart, resizeEnd }
 /// [ScrollView]:
 /// - drag on a bar → move / resize
 /// - long-press then drag on blank → create
+/// - right-click while creating → cancel create
 /// - short drag on blank → parent scroll (pan the day)
 class DayGanttGestures extends StatefulWidget {
   const DayGanttGestures({
@@ -50,7 +51,7 @@ class DayGanttGestures extends StatefulWidget {
 
   /// [localBarRect] is the create preview in this widget's local coordinates.
   final void Function(WallMinutes start, WallMinutes end, Rect localBarRect)
-      onCreateRange;
+  onCreateRange;
   final void Function(Task task)? onTapTask;
   final void Function(Task task, PlacedBar bar)? onSecondaryTapBar;
   final VoidCallback? onSecondaryTapEmpty;
@@ -67,6 +68,7 @@ class DayGanttGestures extends StatefulWidget {
 
 class _DayGanttGesturesState extends State<DayGanttGestures> {
   static const double _edgeSlop = 8;
+
   /// Interior edge zone — Windows clamps the pointer at the window border, so
   /// we cannot rely on rawX < 0 / rawX > width alone.
   static const double _edgeZone = 56;
@@ -87,6 +89,9 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
   Timer? _longPressTimer;
   Timer? _edgeRepeatTimer;
   ScrollHoldController? _scrollHold;
+
+  /// Right-click cancel uses Listener; swallow the following secondary tap.
+  bool _ignoreSecondaryTap = false;
 
   /// Overscroll ladder: base edge time when the finger first enters the zone.
   WallMinutes? _rightEdgeBase;
@@ -206,7 +211,8 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
 
   PlacedBar? _barAt(Offset pos) {
     for (final bar in widget.bars.reversed) {
-      final top = DayGanttLayout.headerHeight +
+      final top =
+          DayGanttLayout.headerHeight +
           bar.lane * DayGanttLayout.laneHeight +
           DayGanttLayout.barGap;
       final height = DayGanttLayout.barHeight;
@@ -254,6 +260,21 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
     _longPressTimer = null;
   }
 
+  /// Drop an in-progress create (ghost bar) without committing.
+  void _cancelCreate({bool suppressSecondaryTap = false}) {
+    if (_mode != _DragMode.create) return;
+    if (suppressSecondaryTap) _ignoreSecondaryTap = true;
+    _activePointer = null;
+    _cancelLongPress();
+    setState(() {
+      _mode = _DragMode.none;
+      _dragTask = null;
+    });
+    _unlockScroll();
+    _resetEdgeLadder();
+    widget.onDragTime?.call(null);
+  }
+
   void _beginBarDrag(PlacedBar bar, Offset pos) {
     final task = _taskOf(bar);
     if (task == null || task.isDone) return;
@@ -275,6 +296,12 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
   }
 
   void _onPointerDown(PointerDownEvent e) {
+    if (e.buttons == kSecondaryMouseButton) {
+      if (_mode == _DragMode.create) {
+        _cancelCreate(suppressSecondaryTap: true);
+      }
+      return;
+    }
     if (e.buttons != kPrimaryButton) return;
     _activePointer = e.pointer;
     _downPos = e.localPosition;
@@ -312,20 +339,27 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
       return;
     }
     final dayAny = widget.geo.viewStart;
-    final anchorTime =
-        clampTimeToAxis(oldWidget.geo.timeOf(_anchorX), dayAny);
-    final currentTime =
-        clampTimeToAxis(oldWidget.geo.timeOf(_currentX), dayAny);
+    final anchorTime = clampTimeToAxis(oldWidget.geo.timeOf(_anchorX), dayAny);
+    final currentTime = clampTimeToAxis(
+      oldWidget.geo.timeOf(_currentX),
+      dayAny,
+    );
     _anchorX = clampXToView(widget.geo, widget.geo.xOf(anchorTime));
     _currentX = clampXToView(widget.geo, widget.geo.xOf(currentTime));
     if (_mode == _DragMode.move) {
-      final grabTime =
-          clampTimeToAxis(oldWidget.geo.timeOf(_grabOffsetX), dayAny);
+      final grabTime = clampTimeToAxis(
+        oldWidget.geo.timeOf(_grabOffsetX),
+        dayAny,
+      );
       _grabOffsetX = clampXToView(widget.geo, widget.geo.xOf(grabTime));
     }
   }
 
   void _onPointerMove(PointerMoveEvent e) {
+    if (_mode == _DragMode.create && (e.buttons & kSecondaryMouseButton) != 0) {
+      _cancelCreate();
+      return;
+    }
     if (_activePointer != e.pointer) return;
 
     if (_mode == _DragMode.none) {
@@ -395,29 +429,31 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
         final width = widget.geo.xOf(range.end) - left;
         final createLane = math.max(
           0,
-          ((_createY - DayGanttLayout.headerHeight) /
-                  DayGanttLayout.laneHeight)
+          ((_createY - DayGanttLayout.headerHeight) / DayGanttLayout.laneHeight)
               .floor(),
         );
-        final top = DayGanttLayout.headerHeight +
+        final top =
+            DayGanttLayout.headerHeight +
             createLane * DayGanttLayout.laneHeight +
             DayGanttLayout.barGap;
-        final height =
-            DayGanttLayout.barHeight;
+        final height = DayGanttLayout.barHeight;
         widget.onCreateRange(
           range.start,
           range.end,
           Rect.fromLTWH(left, top, math.max(width, 2), height),
         );
       case _DragMode.move:
-        await widget
-            .onCommitUpdate(proposeMove(task!, widget.geo, current - grab));
+        await widget.onCommitUpdate(
+          proposeMove(task!, widget.geo, current - grab),
+        );
       case _DragMode.resizeStart:
-        await widget
-            .onCommitUpdate(proposeResizeStart(task!, widget.geo, current));
+        await widget.onCommitUpdate(
+          proposeResizeStart(task!, widget.geo, current),
+        );
       case _DragMode.resizeEnd:
-        await widget
-            .onCommitUpdate(proposeResizeEnd(task!, widget.geo, current));
+        await widget.onCommitUpdate(
+          proposeResizeEnd(task!, widget.geo, current),
+        );
     }
   }
 
@@ -450,114 +486,159 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
     final theme = Theme.of(context);
     final maxX = widget.geo.widthPx;
 
-    return LayoutBuilder(builder: (context, constraints) {
-      final overlays = <Widget>[];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final overlays = <Widget>[];
 
-      if (_mode == _DragMode.create) {
-        final range = proposeCreate(widget.geo, _anchorX, _currentX);
-        final left = widget.geo.xOf(range.start).clamp(0.0, maxX);
-        final right = widget.geo.xOf(range.end).clamp(0.0, maxX);
-        final createLane = math.max(
-          0,
-          ((_createY - DayGanttLayout.headerHeight) /
-                  DayGanttLayout.laneHeight)
-              .floor(),
-        );
-        final barTop = DayGanttLayout.headerHeight +
-            createLane * DayGanttLayout.laneHeight +
-            DayGanttLayout.barGap;
-        overlays.add(_previewOverlay(
-          theme: theme,
-          left: left,
-          barTop: barTop,
-          width: math.max(right - left, 2),
-          label: widget.allowBarDrag
-              ? null
-              : formatBarTimeLabel(range.start, range.end),
-        ));
-      }
+        if (_mode == _DragMode.create) {
+          final range = proposeCreate(widget.geo, _anchorX, _currentX);
+          final left = widget.geo.xOf(range.start).clamp(0.0, maxX);
+          final right = widget.geo.xOf(range.end).clamp(0.0, maxX);
+          final createLane = math.max(
+            0,
+            ((_createY - DayGanttLayout.headerHeight) /
+                    DayGanttLayout.laneHeight)
+                .floor(),
+          );
+          final barTop =
+              DayGanttLayout.headerHeight +
+              createLane * DayGanttLayout.laneHeight +
+              DayGanttLayout.barGap;
+          overlays.add(
+            _previewOverlay(
+              theme: theme,
+              left: left,
+              barTop: barTop,
+              width: math.max(right - left, 2),
+              start: range.start,
+              end: range.end,
+              clipBottom: constraints.maxHeight,
+            ),
+          );
+        }
 
-      final preview = _previewTask();
-      if (preview != null) {
-        final left = widget.geo.xOf(preview.plannedStart).clamp(0.0, maxX);
-        final right = widget.geo.xOf(preview.plannedEnd).clamp(0.0, maxX);
-        final barTop = DayGanttLayout.headerHeight +
-            _dragLane * DayGanttLayout.laneHeight +
-            DayGanttLayout.barGap;
-        overlays.add(_previewOverlay(
-          theme: theme,
-          left: left,
-          barTop: barTop,
-          width: math.max(right - left, 2),
-        ));
-      }
+        final preview = _previewTask();
+        if (preview != null) {
+          final left = widget.geo.xOf(preview.plannedStart).clamp(0.0, maxX);
+          final right = widget.geo.xOf(preview.plannedEnd).clamp(0.0, maxX);
+          final barTop =
+              DayGanttLayout.headerHeight +
+              _dragLane * DayGanttLayout.laneHeight +
+              DayGanttLayout.barGap;
+          overlays.add(
+            _previewOverlay(
+              theme: theme,
+              left: left,
+              barTop: barTop,
+              width: math.max(right - left, 2),
+              start: preview.plannedStart,
+              end: preview.plannedEnd,
+              clipBottom: constraints.maxHeight,
+            ),
+          );
+        }
 
-      return Listener(
-        behavior: HitTestBehavior.translucent,
-        onPointerDown: _onPointerDown,
-        onPointerMove: _onPointerMove,
-        onPointerUp: (e) => _finishPointer(e.pointer),
-        onPointerCancel: (e) => _finishPointer(e.pointer),
-        child: GestureDetector(
+        return Listener(
           behavior: HitTestBehavior.translucent,
-          onTapUp: (d) {
-            if (_mode != _DragMode.none) return;
-            final bar = _barAt(d.localPosition);
-            if (bar != null) {
+          onPointerDown: _onPointerDown,
+          onPointerMove: _onPointerMove,
+          onPointerUp: (e) => _finishPointer(e.pointer),
+          onPointerCancel: (e) => _finishPointer(e.pointer),
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTapUp: (d) {
+              if (_mode != _DragMode.none) return;
+              final bar = _barAt(d.localPosition);
+              if (bar != null) {
+                final task = _taskOf(bar);
+                if (task != null) widget.onTapTask?.call(task);
+              }
+            },
+            onSecondaryTapUp: (d) {
+              if (_ignoreSecondaryTap) {
+                _ignoreSecondaryTap = false;
+                return;
+              }
+              if (_mode == _DragMode.create) {
+                _cancelCreate();
+                return;
+              }
+              final bar = _barAt(d.localPosition);
+              if (bar == null) {
+                widget.onSecondaryTapEmpty?.call();
+                return;
+              }
               final task = _taskOf(bar);
-              if (task != null) widget.onTapTask?.call(task);
-            }
-          },
-          onSecondaryTapUp: (d) {
-            final bar = _barAt(d.localPosition);
-            if (bar == null) {
-              widget.onSecondaryTapEmpty?.call();
-              return;
-            }
-            final task = _taskOf(bar);
-            if (task != null) widget.onSecondaryTapBar?.call(task, bar);
-          },
-          child: Stack(
-            clipBehavior: Clip.hardEdge,
-            children: [widget.canvas, ...overlays],
+              if (task != null) widget.onSecondaryTapBar?.call(task, bar);
+            },
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [widget.canvas, ...overlays],
+            ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
   }
+
+  static const double _previewLabelHeight = 16;
+  static const double _previewLabelGap = 2;
+  static const double _previewLabelExtent =
+      _previewLabelHeight + _previewLabelGap;
 
   Widget _previewOverlay({
     required ThemeData theme,
     required double left,
     required double barTop,
     required double width,
-    String? label,
+    required WallMinutes start,
+    required WallMinutes end,
+    required double clipBottom,
   }) {
-    return Positioned(
-      left: left,
-      top: barTop,
+    final barBottom = barTop + DayGanttLayout.barHeight;
+    final labelAbove = previewMetaLabelAbove(
+      barTop: barTop,
+      barBottom: barBottom,
+      labelExtent: _previewLabelExtent,
+      clipTop: DayGanttLayout.headerHeight,
+      clipBottom: clipBottom,
+    );
+    final overlayTop = labelAbove ? barTop - _previewLabelExtent : barTop;
+    final label = SizedBox(
+      height: _previewLabelHeight,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          formatBarTimeLabel(start, end),
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.visible,
+          style: theme.textTheme.labelLarge?.copyWith(
+            color: theme.colorScheme.onSurface,
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+            height: 1.15,
+          ),
+        ),
+      ),
+    );
+    final bar = Container(
       width: width,
       height: DayGanttLayout.barHeight,
-      child: Container(
-        alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.symmetric(horizontal: 7),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.primary.withValues(alpha: 0.25),
-          border: Border.all(color: theme.colorScheme.primary, width: 1.5),
-        ),
-        child: label == null
-            ? null
-            : Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.clip,
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: Colors.black87,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13,
-                  height: 1.15,
-                ),
-              ),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary.withValues(alpha: 0.25),
+        border: Border.all(color: theme.colorScheme.primary, width: 1.5),
+      ),
+    );
+    return Positioned(
+      left: left,
+      top: overlayTop,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: labelAbove
+            ? [label, const SizedBox(height: _previewLabelGap), bar]
+            : [bar, const SizedBox(height: _previewLabelGap), label],
       ),
     );
   }

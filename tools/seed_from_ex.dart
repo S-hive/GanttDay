@@ -11,15 +11,13 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:uuid/uuid.dart';
 
-import '../lib/domain/gantt/factory_swatches.dart';
-
 /// Same encoding as `WallClock.minutes` (UTC clock-face minutes).
 int wallMinutes(DateTime local) {
   final utc = DateTime.utc(
       local.year, local.month, local.day, local.hour, local.minute);
   return utc.millisecondsSinceEpoch ~/ 60000;
 }
-import '../../domain/gantt/factory_swatches.dart';
+
 Future<void> main(List<String> args) async {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
@@ -94,9 +92,8 @@ Future<void> main(List<String> args) async {
         'actual_start': actualStart,
         'actual_end': actualEnd,
         'is_done': isDone ? 1 : 0,
-        'primary_tag_id': null,
-        'auto_swatch_id': kDefaultSwatchId,
-        'override_swatch_id': null,
+        'tag_id': null,
+        'override_argb': null,
         'notes': type == 'daily'
             ? '日常'
             : (type == 'multi' ? '跨天' : null),
@@ -110,7 +107,6 @@ Future<void> main(List<String> args) async {
   final db = await databaseFactory.openDatabase(dbPath);
   try {
     await db.transaction((txn) async {
-      await txn.delete('task_tag');
       final deleted = await txn.delete('task');
       print('Deleted $deleted existing tasks');
       for (final row in tasks) {

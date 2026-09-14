@@ -1,4 +1,3 @@
-import 'package:ganttday/domain/gantt/factory_swatches.dart';
 import 'package:ganttday/domain/models/task.dart';
 import 'package:ganttday/domain/time/wall_clock.dart';
 import 'package:ganttday/ui/week/week_column_layout.dart';
@@ -15,7 +14,6 @@ Task _task({
     title: title,
     plannedStart: WallClock.minutes(start),
     plannedEnd: WallClock.minutes(end),
-    autoSwatchId: kDefaultSwatchId,
     createdAt: WallClock.minutes(start),
   );
 }

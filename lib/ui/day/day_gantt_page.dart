@@ -2,21 +2,20 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart' hide ColorSwatch;
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../app.dart';
-import '../../domain/gantt/factory_swatches.dart';
-import '../../domain/gantt/swatch_resolve.dart';
-import '../../domain/models/color_swatch.dart';
 import '../../domain/gantt/day_segmenter.dart';
+import '../../domain/gantt/paint_resolve.dart';
 import '../../domain/gantt/day_span_clamp.dart';
 import '../../domain/gantt/day_visible_range.dart';
 import '../../domain/gantt/gantt_geometry.dart';
 import '../../domain/gantt/tag_filter.dart';
 import '../../domain/gantt/urgency_palette.dart';
 import '../../domain/models/app_settings.dart';
+import '../../domain/models/default_color.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
@@ -45,7 +44,7 @@ import 'day_gantt_painter.dart';
 ({List<PlacedBar> bars, List<Task> rows}) buildTableRows({
   required List<Task> tasks,
   required Map<String, Tag> tags,
-  required Map<String, ColorSwatch> swatchesById,
+  int? currentDefaultArgb,
   required GanttGeometry geo,
   required WallMinutes dayAny,
   required WallMinutes now,
@@ -53,8 +52,6 @@ import 'day_gantt_painter.dart';
   /// Keep the edited task on its original waterfall row (do not collapse to 0).
   int? forcedLane,
 }) {
-  final defaultSwatch =
-      swatchesById[kDefaultSwatchId] ?? kFactoryColorSwatches.firstWhere((s) => s.isDefault);
   final sorted = [...tasks]..sort((a, b) {
       final c = a.plannedStart.compareTo(b.plannedStart);
       return c != 0 ? c : a.title.compareTo(b.title);
@@ -93,10 +90,13 @@ import 'day_gantt_painter.dart';
     final shell = useActualShell ? actualSegs.single : plannedSegs.single;
     final lane = forcedLane ?? rows.length;
     rows.add(task);
-    final swatchId = resolveTaskSwatchId(task, tags);
-    final base = swatchesById[swatchId] ?? defaultSwatch;
+    final argb = resolveTaskArgb(
+      task,
+      tags,
+      currentDefaultArgb: currentDefaultArgb,
+    );
     final paint = UrgencyPalette.paint(
-      base: base,
+      argb: argb,
       plannedStart: task.plannedStart,
       plannedEnd: task.plannedEnd,
       now: now,
@@ -147,7 +147,7 @@ import 'day_gantt_painter.dart';
 List<PlacedBar> buildPlacedBars({
   required List<Task> tasks,
   required Map<String, Tag> tags,
-  required Map<String, ColorSwatch> swatchesById,
+  int? currentDefaultArgb,
   required GanttGeometry geo,
   required WallMinutes dayAny,
   required WallMinutes now,
@@ -156,7 +156,7 @@ List<PlacedBar> buildPlacedBars({
   return buildTableRows(
     tasks: tasks,
     tags: tags,
-    swatchesById: swatchesById,
+    currentDefaultArgb: currentDefaultArgb,
     geo: geo,
     dayAny: dayAny,
     now: now,
@@ -193,7 +193,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
   static const double _maxZoom = 4.0;
 
   StreamSubscription<List<Task>>? _tasksSub;
-  StreamSubscription<List<ColorSwatch>>? _swatchesSub;
+  StreamSubscription<List<DefaultColor>>? _defaultsSub;
   StreamSubscription<AppSettings>? _settingsSub;
   Timer? _nowTimer;
   final ScrollController _hScroll = ScrollController();
@@ -215,8 +215,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
 
   List<Task> _tasks = const [];
   Map<String, Tag> _tags = const {};
-  Map<String, ColorSwatch> _swatchesById = const {};
-  Map<String, List<String>> _taskTagIds = const {};
+  int? _currentDefaultArgb;
   AppSettings _settings = const AppSettings();
 
   /// Right-click a bar → in-page actual-time mode (other bars hidden).
@@ -249,11 +248,17 @@ class _DayGanttPageState extends State<DayGanttPage> {
   void initState() {
     super.initState();
     _subscribe();
-    _swatchesSub = widget.services.tasks.watchSwatches().listen((swatches) {
+    _defaultsSub =
+        widget.services.tasks.watchDefaultColors().listen((colors) {
       if (!mounted) return;
-      setState(() {
-        _swatchesById = {for (final s in swatches) s.id: s};
-      });
+      int? current;
+      for (final c in colors) {
+        if (c.isCurrent) {
+          current = c.argb;
+          break;
+        }
+      }
+      setState(() => _currentDefaultArgb = current);
     });
     _settingsSub = widget.services.settings.watch().listen((s) {
       if (!mounted) return;
@@ -292,8 +297,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
     final filtered = _tasks
         .where(
           (t) => taskMatchesTagFilter(
-            primaryTagId: t.primaryTagId,
-            attachedTagIds: _taskTagIds[t.id] ?? const <String>[],
+            tagId: t.tagId,
             filterTagIds: widget.filterTagIds,
           ),
         )
@@ -473,15 +477,10 @@ class _DayGanttPageState extends State<DayGanttPage> {
         .listen((tasks) async {
       final epoch = ++_tasksLoadEpoch;
       final tags = await widget.services.tasks.listTags();
-      final tagIds = <String, List<String>>{};
-      for (final t in tasks) {
-        tagIds[t.id] = await widget.services.tasks.tagIdsForTask(t.id);
-      }
       if (!mounted || epoch != _tasksLoadEpoch) return;
       setState(() {
         _tasks = tasks;
         _tags = {for (final t in tags) t.id: t};
-        _taskTagIds = tagIds;
       });
     });
   }
@@ -492,7 +491,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
       _notifyActualEditMode(false);
     }
     _tasksSub?.cancel();
-    _swatchesSub?.cancel();
+    _defaultsSub?.cancel();
     _settingsSub?.cancel();
     _nowTimer?.cancel();
     _hScroll.dispose();
@@ -601,25 +600,22 @@ class _DayGanttPageState extends State<DayGanttPage> {
     if (title == null || title.trim().isEmpty) return;
     final clamped = clampSpanToAxis(start: start, end: end, dayAny: _day0);
     // Single active filter tag → attach as primary so the new bar stays visible.
-    final primaryTagId =
+    final tagId =
         widget.filterTagIds.length == 1 ? widget.filterTagIds.single : null;
     try {
-      final defaultSwatch = await widget.services.tasks.defaultSwatch();
       final task = Task(
         id: const Uuid().v4(),
         title: title.trim(),
         plannedStart: clamped.start,
         plannedEnd: clamped.end,
-        primaryTagId: primaryTagId,
-        autoSwatchId: defaultSwatch.id,
+        tagId: tagId,
         createdAt: WallClock.now(),
       );
       await widget.services.tasks.upsert(task);
       if (!mounted) return;
       if (widget.filterTagIds.length > 1 &&
           !taskMatchesTagFilter(
-            primaryTagId: task.primaryTagId,
-            attachedTagIds: const [],
+            tagId: task.tagId,
             filterTagIds: widget.filterTagIds,
           )) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -703,7 +699,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
       final table = buildTableRows(
         tasks: visibleTasks,
         tags: _tags,
-        swatchesById: _swatchesById,
+        currentDefaultArgb: _currentDefaultArgb,
         geo: geo,
         dayAny: _day0,
         now: now,

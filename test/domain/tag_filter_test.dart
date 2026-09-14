@@ -4,63 +4,32 @@ import 'package:test/test.dart';
 void main() {
   test('empty filter matches everything', () {
     expect(
-      taskMatchesTagFilter(
-        primaryTagId: null,
-        attachedTagIds: const [],
-        filterTagIds: const {},
-      ),
+      taskMatchesTagFilter(tagId: null, filterTagIds: const {}),
       isTrue,
     );
     expect(
-      taskMatchesTagFilter(
-        primaryTagId: 'a',
-        attachedTagIds: const ['b'],
-        filterTagIds: const {},
-      ),
+      taskMatchesTagFilter(tagId: 'a', filterTagIds: const {}),
       isTrue,
     );
   });
 
-  test('matches primary tag', () {
+  test('matches the single tag', () {
     expect(
-      taskMatchesTagFilter(
-        primaryTagId: 'work',
-        attachedTagIds: const [],
-        filterTagIds: {'work'},
-      ),
+      taskMatchesTagFilter(tagId: 'work', filterTagIds: {'work'}),
       isTrue,
     );
   });
 
-  test('matches attached tag without primary', () {
+  test('rejects a different tag', () {
     expect(
-      taskMatchesTagFilter(
-        primaryTagId: null,
-        attachedTagIds: const ['life'],
-        filterTagIds: {'life'},
-      ),
-      isTrue,
+      taskMatchesTagFilter(tagId: 'work', filterTagIds: {'sport'}),
+      isFalse,
     );
   });
 
-  test('matches attached tag when primary differs', () {
+  test('untagged task is hidden when a filter is on', () {
     expect(
-      taskMatchesTagFilter(
-        primaryTagId: 'work',
-        attachedTagIds: const ['life'],
-        filterTagIds: {'life'},
-      ),
-      isTrue,
-    );
-  });
-
-  test('rejects when neither primary nor attached hits', () {
-    expect(
-      taskMatchesTagFilter(
-        primaryTagId: 'work',
-        attachedTagIds: const ['life'],
-        filterTagIds: {'sport'},
-      ),
+      taskMatchesTagFilter(tagId: null, filterTagIds: {'work'}),
       isFalse,
     );
   });

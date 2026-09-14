@@ -1,6 +1,7 @@
 import '../models/color_swatch.dart';
 
 const String kDefaultSwatchId = 'azure';
+const int kFallbackArgb = 0xFF457BD9;
 
 /// Seed rows for new DBs and schema 1→2 migration. H/S/L match prior palette.
 const List<ColorSwatch> kFactoryColorSwatches = [

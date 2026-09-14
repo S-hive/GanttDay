@@ -1,4 +1,3 @@
-import 'package:ganttday/data/sqlite/app_database.dart';
 import 'package:ganttday/data/sqlite/swatch_migration.dart';
 import 'package:ganttday/domain/gantt/factory_swatches.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -128,44 +127,5 @@ void main() {
     expect(t2SwatchId, isNot(customTagSwatchId));
 
     await db.close();
-  });
-
-  test('AppDatabase.open fresh creates v2 schema with factory swatches', () async {
-    final db = await AppDatabase.open(databaseFactory, inMemoryDatabasePath);
-
-    final swatches = await db.query('color_swatch');
-    expect(swatches.length, kFactoryColorSwatches.length);
-
-    expect(await _columnNames(db, 'task'), contains('auto_swatch_id'));
-    expect(await _columnNames(db, 'task'), isNot(contains('auto_hue')));
-    expect(await _columnNames(db, 'tag'), contains('swatch_id'));
-    expect(await _columnNames(db, 'tag'), isNot(contains('hue')));
-
-    await db.close();
-  });
-
-  test('AppDatabase.open upgrades v1 database to v2', () async {
-    const path = 'v1_upgrade_test.db';
-    final v1 = await databaseFactory.openDatabase(
-      path,
-      options: OpenDatabaseOptions(
-        version: 1,
-        onCreate: (db, version) => _createV1Schema(db),
-      ),
-    );
-    await v1.insert('tag', {'id': 'tg1', 'name': 'a', 'hue': 24});
-    await v1.close();
-
-    final db = await AppDatabase.open(databaseFactory, path);
-    expect(await _columnNames(db, 'tag'), contains('swatch_id'));
-    expect(await _columnNames(db, 'tag'), isNot(contains('hue')));
-    expect(
-      (await db.query('tag')).single['swatch_id'],
-      'peach',
-    );
-    expect((await db.query('color_swatch')).length, 8);
-
-    await db.close();
-    await databaseFactory.deleteDatabase(path);
   });
 }
