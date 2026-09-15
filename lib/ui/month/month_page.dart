@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../domain/gantt/argb_color.dart';
 import '../../domain/gantt/paint_resolve.dart';
-import '../../domain/gantt/tag_filter.dart';
 import '../../domain/gantt/urgency_palette.dart';
 import '../../domain/models/default_color.dart';
 import '../../domain/models/tag.dart';
@@ -22,13 +21,11 @@ class MonthPage extends StatefulWidget {
     required this.services,
     required this.month,
     required this.onOpenDay,
-    this.filterTagIds = const {},
   });
 
   final AppServices services;
   final DateTime month;
   final void Function(DateTime day) onOpenDay;
-  final Set<String> filterTagIds;
 
   @override
   State<MonthPage> createState() => _MonthPageState();
@@ -76,8 +73,6 @@ class _MonthPageState extends State<MonthPage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.month != widget.month) {
       _subscribe();
-    } else if (oldWidget.filterTagIds != widget.filterTagIds) {
-      setState(() {});
     }
   }
 
@@ -134,17 +129,9 @@ class _MonthPageState extends State<MonthPage> {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _tasks
-        .where(
-          (t) => taskMatchesTagFilter(
-            tagId: t.tagId,
-            filterTagIds: widget.filterTagIds,
-          ),
-        )
-        .toList();
     final selected = selectVisibleMonthTasks(
       month: _monthStart,
-      tasks: filtered,
+      tasks: _tasks,
     );
     final weeks = buildMonthWeekLayouts(
       month: _monthStart,

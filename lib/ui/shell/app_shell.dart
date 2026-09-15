@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../app.dart';
-import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
-import '../common/rect_swatch.dart';
 import '../common/side_drawer.dart';
 import '../day/day_gantt_page.dart';
 import '../month/month_page.dart';
@@ -25,26 +23,9 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   DateTime _date = DateTime.now();
   int _navIndex = 0; // 0 day, 1 week, 2 month
-  Set<String> _filterTagIds = {};
-  List<Tag> _tags = const [];
 
   /// Day actual-edit mode: hide AppBar; tip banner replaces it.
   bool _dayActualEditMode = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _reloadTags();
-  }
-
-  Future<void> _reloadTags() async {
-    final tags = await widget.services.tasks.listTags();
-    if (mounted) {
-      setState(() {
-        _tags = tags;
-      });
-    }
-  }
 
   void _shift(int delta) {
     setState(() {
@@ -74,7 +55,6 @@ class _AppShellState extends State<AppShell> {
             : null,
       ),
     );
-    await _reloadTags();
   }
 
   Future<void> _openSettings() async {
@@ -82,7 +62,6 @@ class _AppShellState extends State<AppShell> {
       context: context,
       builder: (_) => SettingsPage(services: widget.services),
     );
-    await _reloadTags();
   }
 
   String get _titleLabel {
@@ -129,74 +108,6 @@ class _AppShellState extends State<AppShell> {
                 ],
               ),
               actions: [
-                if (_tags.isNotEmpty)
-                  MenuAnchor(
-                    builder: (context, controller, child) {
-                      return IconButton(
-                        tooltip: '标签筛选',
-                        onPressed: () {
-                          if (controller.isOpen) {
-                            controller.close();
-                          } else {
-                            controller.open();
-                          }
-                        },
-                        icon: Badge(
-                          isLabelVisible: _filterTagIds.isNotEmpty,
-                          smallSize: 8,
-                          child: const Icon(Icons.filter_list),
-                        ),
-                      );
-                    },
-                    menuChildren: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 360),
-                          child: Wrap(
-                            spacing: 8,
-                            runSpacing: 4,
-                            children: [
-                              GestureDetector(
-                                onTap: () =>
-                                    setState(() => _filterTagIds = {}),
-                                child: Text(
-                                  '全部',
-                                  style: TextStyle(
-                                    fontWeight: _filterTagIds.isEmpty
-                                        ? FontWeight.w700
-                                        : FontWeight.w400,
-                                  ),
-                                ),
-                              ),
-                              for (final tag in _tags)
-                                GestureDetector(
-                                  onTap: () => setState(() {
-                                    final next = {..._filterTagIds};
-                                    if (!next.remove(tag.id)) {
-                                      next.add(tag.id);
-                                    }
-                                    _filterTagIds = next;
-                                  }),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      RectSwatch(
-                                        argb: tag.argb,
-                                        selected:
-                                            _filterTagIds.contains(tag.id),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(tag.name),
-                                    ],
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
                 IconButton(
                   icon: const Icon(Icons.settings_outlined),
                   tooltip: '',
@@ -224,7 +135,6 @@ class _AppShellState extends State<AppShell> {
           child: WeekGanttPage(
             services: widget.services,
             anchorDate: _date,
-            filterTagIds: _filterTagIds,
             onOpenDay: (day) => setState(() {
               _date = day;
               _navIndex = 0;
@@ -236,7 +146,6 @@ class _AppShellState extends State<AppShell> {
           child: MonthPage(
             services: widget.services,
             month: _date,
-            filterTagIds: _filterTagIds,
             onOpenDay: (day) => setState(() {
               _date = day;
               _navIndex = 0;
@@ -247,7 +156,6 @@ class _AppShellState extends State<AppShell> {
         return DayGanttPage(
           services: widget.services,
           date: _date,
-          filterTagIds: _filterTagIds,
           onBarTap: (task) => _openForm(existing: task),
           onActualEditModeChanged: (active) {
             if (!mounted || _dayActualEditMode == active) return;

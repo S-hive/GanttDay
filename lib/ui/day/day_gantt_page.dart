@@ -12,7 +12,6 @@ import '../../domain/gantt/paint_resolve.dart';
 import '../../domain/gantt/day_span_clamp.dart';
 import '../../domain/gantt/day_visible_range.dart';
 import '../../domain/gantt/gantt_geometry.dart';
-import '../../domain/gantt/tag_filter.dart';
 import '../../domain/gantt/urgency_palette.dart';
 import '../../domain/models/app_settings.dart';
 import '../../domain/models/default_color.dart';
@@ -23,6 +22,7 @@ import 'bar_time_label.dart';
 import 'create_task_popup.dart';
 import 'day_gantt_gestures.dart';
 import 'day_gantt_painter.dart';
+import 'delete_veil.dart';
 
 /// Prefer actual below planned; if that lane is past [viewportLanes], place above.
 /// When planned is on row 0 and there is no room below, swap: actual=0, planned=1.
@@ -171,7 +171,6 @@ class DayGanttPage extends StatefulWidget {
     required this.date,
     this.onBarTap,
     this.interactive = true,
-    this.filterTagIds = const {},
     this.onActualEditModeChanged,
   });
 
@@ -179,7 +178,6 @@ class DayGanttPage extends StatefulWidget {
   final DateTime date;
   final void Function(Task task)? onBarTap;
   final bool interactive;
-  final Set<String> filterTagIds;
 
   /// Notifies shell when in-page actual-edit mode starts/ends (hide AppBar).
   final ValueChanged<bool>? onActualEditModeChanged;
@@ -220,6 +218,9 @@ class _DayGanttPageState extends State<DayGanttPage> {
 
   /// Right-click a bar → in-page actual-time mode (other bars hidden).
   String? _actualEditTaskId;
+
+  /// Double-tap a bar → full-page delete veil (red confirms, green/Esc cancels).
+  String? _deleteVeilTaskId;
 
   /// Waterfall row to keep when editing (captured at enter; avoid collapse to 0).
   int? _actualEditLane;
@@ -288,23 +289,16 @@ class _DayGanttPageState extends State<DayGanttPage> {
       _clearStickyFit();
       _actualEditTaskId = null;
       _actualEditLane = null;
+      _deleteVeilTaskId = null;
       _subscribe();
       if (wasEditing) _notifyActualEditMode(false);
     }
   }
 
   List<Task> get _visibleTasks {
-    final filtered = _tasks
-        .where(
-          (t) => taskMatchesTagFilter(
-            tagId: t.tagId,
-            filterTagIds: widget.filterTagIds,
-          ),
-        )
-        .toList();
     final editId = _actualEditTaskId;
-    if (editId == null) return filtered;
-    return filtered.where((t) => t.id == editId).toList();
+    if (editId == null) return _tasks;
+    return _tasks.where((t) => t.id == editId).toList();
   }
 
   Task? get _actualEditTask {
@@ -327,6 +321,25 @@ class _DayGanttPageState extends State<DayGanttPage> {
       _actualEditLane = null;
     });
     _notifyActualEditMode(false);
+  }
+
+  void _dismissDeleteVeil() {
+    if (_deleteVeilTaskId == null) return;
+    setState(() => _deleteVeilTaskId = null);
+  }
+
+  Future<void> _confirmDeleteVeil() async {
+    final id = _deleteVeilTaskId;
+    if (id == null) return;
+    setState(() => _deleteVeilTaskId = null);
+    try {
+      await widget.services.tasks.delete(id);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('删除失败：$e')),
+      );
+    }
   }
 
   void _enterActualEditMode(Task task, {required int lane}) {
@@ -599,29 +612,16 @@ class _DayGanttPageState extends State<DayGanttPage> {
     }
     if (title == null || title.trim().isEmpty) return;
     final clamped = clampSpanToAxis(start: start, end: end, dayAny: _day0);
-    // Single active filter tag → attach as primary so the new bar stays visible.
-    final tagId =
-        widget.filterTagIds.length == 1 ? widget.filterTagIds.single : null;
     try {
       final task = Task(
         id: const Uuid().v4(),
         title: title.trim(),
         plannedStart: clamped.start,
         plannedEnd: clamped.end,
-        tagId: tagId,
         createdAt: WallClock.now(),
       );
       await widget.services.tasks.upsert(task);
       if (!mounted) return;
-      if (widget.filterTagIds.length > 1 &&
-          !taskMatchesTagFilter(
-            tagId: task.tagId,
-            filterTagIds: widget.filterTagIds,
-          )) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已创建；当前多标签筛选未包含该任务，可点「全部」查看')),
-        );
-      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -664,13 +664,19 @@ class _DayGanttPageState extends State<DayGanttPage> {
     final editTask = _actualEditTask;
     // Stable Column: banner slot + Expanded(gantt). Do not reparent the
     // horizontal ScrollView when toggling edit mode (ScrollController attach).
-    return CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.escape): _exitActualEditMode,
-      },
-      child: Focus(
-        autofocus: editTask != null,
-        child: Column(
+    return DayDeleteVeilStack(
+      veilOpen: _deleteVeilTaskId != null,
+      onDelete: _confirmDeleteVeil,
+      onCancel: _dismissDeleteVeil,
+      child: CallbackShortcuts(
+        bindings: {
+          if (_deleteVeilTaskId == null)
+            const SingleActivator(LogicalKeyboardKey.escape):
+                _exitActualEditMode,
+        },
+        child: Focus(
+          autofocus: editTask != null,
+          child: Column(
           children: [
             editTask != null
                 ? _actualEditBanner(editTask)
@@ -781,6 +787,9 @@ class _DayGanttPageState extends State<DayGanttPage> {
                     onCommitUpdate: _commitUpdate,
                     onCreateRange: _createFromRange,
                     onTapTask: widget.onBarTap,
+                    onDoubleTapTask: (task) {
+                      setState(() => _deleteVeilTaskId = task.id);
+                    },
                     onSecondaryTapBar: _onSecondaryTapBar,
                     onSecondaryTapEmpty:
                         editingActual ? _exitActualEditMode : null,
@@ -821,6 +830,7 @@ class _DayGanttPageState extends State<DayGanttPage> {
               }),
             ),
           ],
+        ),
         ),
       ),
     );

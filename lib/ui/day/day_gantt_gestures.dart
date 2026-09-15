@@ -10,6 +10,7 @@ import '../../domain/gantt/gantt_geometry.dart';
 import '../../domain/models/task.dart';
 import '../../domain/time/wall_clock.dart';
 import 'bar_time_label.dart';
+import 'day_bar_tap_classifier.dart';
 import 'day_gantt_painter.dart';
 
 export '../../domain/gantt/day_gesture_math.dart';
@@ -36,6 +37,7 @@ class DayGanttGestures extends StatefulWidget {
     required this.onCommitUpdate,
     required this.onCreateRange,
     this.onTapTask,
+    this.onDoubleTapTask,
     this.onSecondaryTapBar,
     this.onSecondaryTapEmpty,
     this.onDragTime,
@@ -53,6 +55,7 @@ class DayGanttGestures extends StatefulWidget {
   final void Function(WallMinutes start, WallMinutes end, Rect localBarRect)
   onCreateRange;
   final void Function(Task task)? onTapTask;
+  final void Function(Task task)? onDoubleTapTask;
   final void Function(Task task, PlacedBar bar)? onSecondaryTapBar;
   final VoidCallback? onSecondaryTapEmpty;
 
@@ -93,6 +96,9 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
   /// Right-click cancel uses Listener; swallow the following secondary tap.
   bool _ignoreSecondaryTap = false;
 
+  PlacedBar? _pendingBar;
+  late final DayBarTapClassifier _taps;
+
   /// Overscroll ladder: base edge time when the finger first enters the zone.
   WallMinutes? _rightEdgeBase;
   double? _rightHourPx;
@@ -100,6 +106,21 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
   WallMinutes? _leftEdgeBase;
   double? _leftHourPx;
   double _leftPushPx = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _taps = DayBarTapClassifier(
+      onSingleTap: (id) {
+        final t = _taskById(id);
+        if (t != null) widget.onTapTask?.call(t);
+      },
+      onDoubleTap: (id) {
+        final t = _taskById(id);
+        if (t != null) widget.onDoubleTapTask?.call(t);
+      },
+    );
+  }
 
   void _resetEdgeLadder() {
     _rightEdgeBase = null;
@@ -237,12 +258,14 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
     return null;
   }
 
-  Task? _taskOf(PlacedBar bar) {
+  Task? _taskById(String id) {
     for (final t in widget.tasks) {
-      if (t.id == bar.taskId) return t;
+      if (t.id == id) return t;
     }
     return null;
   }
+
+  Task? _taskOf(PlacedBar bar) => _taskById(bar.taskId);
 
   void _lockScroll() {
     if (_scrollHold != null) return;
@@ -282,9 +305,9 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
     setState(() {
       _dragTask = task;
       _dragLane = bar.lane;
-      if ((pos.dx - bar.x).abs() <= _edgeSlop) {
+      if ((_downPos.dx - bar.x).abs() <= _edgeSlop) {
         _mode = _DragMode.resizeStart;
-      } else if ((pos.dx - (bar.x + bar.width)).abs() <= _edgeSlop) {
+      } else if ((_downPos.dx - (bar.x + bar.width)).abs() <= _edgeSlop) {
         _mode = _DragMode.resizeEnd;
       } else {
         _mode = _DragMode.move;
@@ -308,8 +331,10 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
     _cancelLongPress();
 
     final bar = _barAt(e.localPosition);
-    if (bar != null && widget.allowBarDrag) {
-      _beginBarDrag(bar, e.localPosition);
+    if (bar != null) {
+      _pendingBar = bar;
+      final task = _taskOf(bar);
+      if (task != null) _taps.down(task.id);
       return;
     }
 
@@ -365,6 +390,13 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
     if (_mode == _DragMode.none) {
       if ((e.localPosition - _downPos).distance > kTouchSlop) {
         _cancelLongPress();
+        if (_pendingBar != null) {
+          _taps.movedBeyondSlop();
+          if (widget.allowBarDrag) {
+            _beginBarDrag(_pendingBar!, e.localPosition);
+          }
+          _pendingBar = null;
+        }
       }
       return;
     }
@@ -401,10 +433,19 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
     }
   }
 
-  Future<void> _finishPointer(int pointer) async {
+  Future<void> _finishPointer(int pointer, {bool cancelled = false}) async {
     if (_activePointer != pointer) return;
     _activePointer = null;
     _cancelLongPress();
+
+    if (_pendingBar != null && _mode == _DragMode.none) {
+      if (cancelled) {
+        _taps.movedBeyondSlop();
+      } else {
+        _taps.up();
+      }
+      _pendingBar = null;
+    }
 
     final mode = _mode;
     final task = _dragTask;
@@ -475,6 +516,7 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
 
   @override
   void dispose() {
+    _taps.dispose();
     _longPressTimer?.cancel();
     _edgeRepeatTimer?.cancel();
     _unlockScroll();
@@ -543,17 +585,9 @@ class _DayGanttGesturesState extends State<DayGanttGestures> {
           onPointerDown: _onPointerDown,
           onPointerMove: _onPointerMove,
           onPointerUp: (e) => _finishPointer(e.pointer),
-          onPointerCancel: (e) => _finishPointer(e.pointer),
+          onPointerCancel: (e) => _finishPointer(e.pointer, cancelled: true),
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
-            onTapUp: (d) {
-              if (_mode != _DragMode.none) return;
-              final bar = _barAt(d.localPosition);
-              if (bar != null) {
-                final task = _taskOf(bar);
-                if (task != null) widget.onTapTask?.call(task);
-              }
-            },
             onSecondaryTapUp: (d) {
               if (_ignoreSecondaryTap) {
                 _ignoreSecondaryTap = false;

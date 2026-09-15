@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../domain/gantt/argb_color.dart';
 import '../../domain/gantt/paint_resolve.dart';
-import '../../domain/gantt/tag_filter.dart';
 import '../../domain/gantt/urgency_palette.dart';
 import '../../domain/models/app_settings.dart';
 import '../../domain/models/default_color.dart';
@@ -25,13 +24,11 @@ class WeekGanttPage extends StatefulWidget {
     super.key,
     required this.services,
     required this.anchorDate,
-    this.filterTagIds = const {},
     this.onOpenDay,
   });
 
   final AppServices services;
   final DateTime anchorDate;
-  final Set<String> filterTagIds;
   final void Function(DateTime day)? onOpenDay;
 
   @override
@@ -110,8 +107,6 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
     if (oldWidget.anchorDate != widget.anchorDate) {
       _didInitialScroll = false;
       _subscribe();
-    } else if (oldWidget.filterTagIds != widget.filterTagIds) {
-      setState(() {});
     }
   }
 
@@ -138,17 +133,6 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
     _settingsSub?.cancel();
     _vScroll.dispose();
     super.dispose();
-  }
-
-  List<Task> get _filtered {
-    return _tasks
-        .where(
-          (t) => taskMatchesTagFilter(
-            tagId: t.tagId,
-            filterTagIds: widget.filterTagIds,
-          ),
-        )
-        .toList();
   }
 
   BarPaint _paintFor(Task task) {
@@ -197,8 +181,8 @@ class _WeekGanttPageState extends State<WeekGanttPage> {
 
   @override
   Widget build(BuildContext context) {
-    final slots = layoutWeekSlots(weekMonday: _weekStart, tasks: _filtered);
-    final byId = {for (final t in _filtered) t.id: t};
+    final slots = layoutWeekSlots(weekMonday: _weekStart, tasks: _tasks);
+    final byId = {for (final t in _tasks) t.id: t};
     final headers = const ['一', '二', '三', '四', '五', '六', '日'];
     final bodyHeight = 24 * _hourHeight;
     final now = DateTime.now();
